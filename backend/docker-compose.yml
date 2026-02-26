@@ -1,0 +1,44 @@
+services:
+  # 1. Kalıcı Veritabanı (Kullanıcı Profilleri, Film Geçmişi, Mesaj Logları)
+  mongodb:
+    image: mongo:latest
+    container_name: movder_mongo
+    restart: always
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password123
+    volumes:
+      - mongo_data:/data/db
+
+  # 2. Hızlı Bellek (Canlı İzleme Sayaçları, O Anki "Online" Durumları)
+  redis:
+    image: redis:alpine
+    container_name: movder_redis
+    restart: always
+    ports:
+      - "6379:6379"
+    command: redis-server --requirepass "redispass123"
+    volumes:
+      - redis_data:/data
+
+  # 3. Mesaj ve Görev Kuyruğu (Eşleşme Radarı ve Chat Trafik Polisi)
+  rabbitmq:
+    image: rabbitmq:3-management-alpine # "-management" eki bize şık bir tarayıcı paneli verir
+    container_name: movder_rabbitmq
+    restart: always
+    ports:
+      - "5672:5672"   # Go sunucumuzun haberleşeceği ana port
+      - "15672:15672" # Bizim tarayıcıdan gireceğimiz Yönetim Paneli
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: rabbitpass123
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+
+# Verilerin bilgisayarı kapatsak bile silinmemesi için kalıcı disk alanları
+volumes:
+  mongo_data:
+  redis_data:
+  rabbitmq_data:

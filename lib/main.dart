@@ -1,6 +1,11 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'models/movie.dart';
+import 'services/api_service.dart';
+import 'screens/movie_detail_screen.dart';
+import 'screens/profile_screen.dart';
 
 void main() {
   runApp(const MovderApp());
@@ -19,7 +24,73 @@ class MovderApp extends StatelessWidget {
         scaffoldBackgroundColor: const Color(0xFF0F0F0F),
         primaryColor: Colors.redAccent,
       ),
-      home: const MovieRadarScreen(),
+      home: const MainNavigatorScreen(),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// ANA MENÜ: BOTTOM NAVIGATION SARMALAYICISI
+// ─────────────────────────────────────────────────────────────
+class MainNavigatorScreen extends StatefulWidget {
+  const MainNavigatorScreen({super.key});
+
+  @override
+  State<MainNavigatorScreen> createState() => _MainNavigatorScreenState();
+}
+
+class _MainNavigatorScreenState extends State<MainNavigatorScreen> {
+  int _currentIndex = 0;
+
+  final List<Widget> _pages = [
+    const MovieRadarScreen(), // Film Radar sayfası artık Anasayfa oldu
+    const Center(
+        child: Text("Eşleşme Ara (Yakında)",
+            style: TextStyle(color: Colors.white, fontSize: 18))),
+    const Center(
+        child: Text("Sohbetler",
+            style: TextStyle(color: Colors.white))), // TODO: Chat Screen
+    const ProfileScreen(), // Yeni kodlanan Profil/Hesabım ekranı
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: IndexedStack(
+        index: _currentIndex,
+        children: _pages,
+      ),
+      bottomNavigationBar: BottomNavigationBar(
+        backgroundColor: const Color(0xFF0F0F0F),
+        selectedItemColor: Colors.redAccent,
+        unselectedItemColor: Colors.white54,
+        type: BottomNavigationBarType
+            .fixed, // 3'ten fazla eleman olunca isimlerin kaybolmaması için
+        currentIndex: _currentIndex,
+        onTap: (index) {
+          setState(() {
+            _currentIndex = index;
+          });
+        },
+        items: const [
+          BottomNavigationBarItem(
+            icon: Icon(Icons.home_filled),
+            label: "Anasayfa",
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.radar),
+            label: "Eşleşme Ara",
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.chat_bubble_outline),
+            label: "Mesajlar",
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.person),
+            label: "Hesabım",
+          ),
+        ],
+      ),
     );
   }
 }
@@ -58,7 +129,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
         final data = jsonDecode(response.body);
         _showSnackBar("Başarılı! ID: ${data['userId']}", Colors.green);
       } else {
-        _showSnackBar("Bir hata oluştu: ${response.body}", Colors.red);
+        final data = jsonDecode(response.body);
+        _showSnackBar(data['error'] ?? "Bir hata oluştu", Colors.red);
       }
     } catch (e) {
       _showSnackBar("Sunucuya ulaşılamadı. Go açık mı?", Colors.orange);
@@ -148,169 +220,94 @@ class _RegisterScreenState extends State<RegisterScreen> {
 }
 
 // ─────────────────────────────────────────────────────────────
-// ANA EKRAN — KATEGORİLİ FİLM RADAR
+// ANA EKRAN — GERÇEK TMDB VERİLERİYLE FİLM RADAR
 // ─────────────────────────────────────────────────────────────
-class MovieRadarScreen extends StatelessWidget {
+class MovieRadarScreen extends StatefulWidget {
   const MovieRadarScreen({super.key});
 
-  // Yardımcı: Film listesi tanımları
-  static final List<Map<String, dynamic>> _trending = [
-    {
-      "title": "Titanic",
-      "poster":
-          "https://image.tmdb.org/t/p/w500/9xj7rB6RdrNE02tgnvU9Gv3df5S.jpg",
-      "watchers": 1240,
-      "platform": "Netflix"
-    },
-    {
-      "title": "Interstellar",
-      "poster":
-          "https://image.tmdb.org/t/p/w500/gEU2QniE6EJBQwOQvIn9qQp2pZp.jpg",
-      "watchers": 850,
-      "platform": "Disney+"
-    },
-    {
-      "title": "The Dark Knight",
-      "poster":
-          "https://image.tmdb.org/t/p/w500/qJ2tW6WMUDp9QmSbmvQv2GqQpS7.jpg",
-      "watchers": 620,
-      "platform": "Prime"
-    },
-    {
-      "title": "Inception",
-      "poster":
-          "https://image.tmdb.org/t/p/w500/oYuEqDPkEKJ5FhK1S9J4A9Xj0f.jpg",
-      "watchers": 780,
-      "platform": "Netflix"
-    },
-    {
-      "title": "Pulp Fiction",
-      "poster":
-          "https://image.tmdb.org/t/p/w500/d5iIlFn5s0ImszYzBMiV9mz8oIr.jpg",
-      "watchers": 550,
-      "platform": "Prime"
-    },
-  ];
+  @override
+  State<MovieRadarScreen> createState() => _MovieRadarScreenState();
+}
 
-  static final List<Map<String, dynamic>> _newReleases = [
-    {
-      "title": "Dune: Part Two",
-      "poster":
-          "https://image.tmdb.org/t/p/w500/1pdfLvkbYGDYgc1f2h5tdrKmkC.jpg",
-      "watchers": 980,
-      "platform": "Max"
-    },
-    {
-      "title": "Oppenheimer",
-      "poster":
-          "https://image.tmdb.org/t/p/w500/8Gxv8gSFCU0mDGukH2x2c5G0u6x.jpg",
-      "watchers": 720,
-      "platform": "Prime"
-    },
-    {
-      "title": "Barbie",
-      "poster":
-          "https://image.tmdb.org/t/p/w500/iuFNMS8U5s6Y82otCoYFh6vWz8x.jpg",
-      "watchers": 650,
-      "platform": "Netflix"
-    },
-    {
-      "title": "Killers of the Flower Moon",
-      "poster":
-          "https://image.tmdb.org/t/p/w500/dB6Krk806fZQp2tiNYhpQ9ZUKX6.jpg",
-      "watchers": 480,
-      "platform": "Apple TV+"
-    },
-  ];
+class _MovieRadarScreenState extends State<MovieRadarScreen> {
+  List<Movie> _trendingMovies = [];
+  List<Movie> _mindfuckMovies = [];
+  List<Movie> _exMovies = [];
+  List<Movie> _horrorMovies = [];
+  List<Movie> _indieMovies = [];
+  List<Movie> _searchResults = [];
+  bool _isSearching = false;
+  bool _isLoading = true;
+  Timer? _debounce;
 
-  static final List<Map<String, dynamic>> _nightMood = [
-    {
-      "title": "Spider-Man: Across the Spider-Verse",
-      "poster":
-          "https://image.tmdb.org/t/p/w500/8Vt6mWEReuy4Ofc6dqK5XjNkQYd.jpg",
-      "watchers": 500,
-      "platform": "Disney+"
-    },
-    {
-      "title": "Guardians of the Galaxy Vol. 3",
-      "poster":
-          "https://image.tmdb.org/t/p/w500/r2J02Z2OpqeVEcQ8A7DkYxLGfNk.jpg",
-      "watchers": 420,
-      "platform": "Disney+"
-    },
-    {
-      "title": "The Super Mario Bros. Movie",
-      "poster":
-          "https://image.tmdb.org/t/p/w500/qNBAXBIQlnOThrVVaH6pi3FFADM.jpg",
-      "watchers": 380,
-      "platform": "Peacock"
-    },
-  ];
+  final TextEditingController _searchController = TextEditingController();
 
-  static final List<Map<String, dynamic>> _classics = [
-    {
-      "title": "The Godfather",
-      "poster":
-          "https://image.tmdb.org/t/p/w500/3bhkrj58Vtu7enYsLleL3uqfDO9.jpg",
-      "watchers": 890,
-      "platform": "Prime"
-    },
-    {
-      "title": "Schindler's List",
-      "poster":
-          "https://image.tmdb.org/t/p/w500/sF1U4EUQS8YHUYjNl3pMGNIQyr0.jpg",
-      "watchers": 640,
-      "platform": "Netflix"
-    },
-    {
-      "title": "Forrest Gump",
-      "poster":
-          "https://image.tmdb.org/t/p/w500/arw2vcBveWOVZr6pxd9XTd1TdQa.jpg",
-      "watchers": 710,
-      "platform": "Max"
-    },
-    {
-      "title": "The Shawshank Redemption",
-      "poster":
-          "https://image.tmdb.org/t/p/w500/q6y0Go1tsGEsmtFryDOJo3dEmqu.jpg",
-      "watchers": 930,
-      "platform": "Netflix"
-    },
-  ];
+  @override
+  void initState() {
+    super.initState();
+    _loadTrending();
+  }
 
-  static final List<Map<String, dynamic>> _horror = [
-    {
-      "title": "Hereditary",
-      "poster":
-          "https://image.tmdb.org/t/p/w500/p9DKeXp6FxhHnLDYkQKf9rJSzaQ.jpg",
-      "watchers": 470,
-      "platform": "Max"
-    },
-    {
-      "title": "Get Out",
-      "poster":
-          "https://image.tmdb.org/t/p/w500/tFXcEccSQMf3lfhfXKSU9iRBpa3.jpg",
-      "watchers": 390,
-      "platform": "Prime"
-    },
-    {
-      "title": "A Quiet Place",
-      "poster":
-          "https://image.tmdb.org/t/p/w500/nAU74GmpUk7t5iklEp3bufwDq4n.jpg",
-      "watchers": 355,
-      "platform": "Netflix"
-    },
-    {
-      "title": "The Conjuring",
-      "poster":
-          "https://image.tmdb.org/t/p/w500/wVYREutTvI2tmxr6ujrHT704wGF.jpg",
-      "watchers": 510,
-      "platform": "Max"
-    },
-  ];
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadTrending() async {
+    // Tüm kategorileri paralel olarak çek
+    final results = await Future.wait([
+      ApiService.getTrending(),
+      ApiService.getDiscoverMovies(
+          '878,9648'), // Bilim Kurgu & Gizem (Beyin Yakanlar)
+      ApiService.getDiscoverMovies(
+          '10749,18'), // Romantik & Dram (Eski Sevgiliyi Hatırlatanlar)
+      ApiService.getDiscoverMovies('27,53'), // Korku & Gerilim
+      ApiService.getDiscoverMovies(
+          '10402,36'), // Müzik & Tarih vs Indie konsepti
+    ]);
+
+    if (mounted) {
+      setState(() {
+        _trendingMovies = results[0];
+        _mindfuckMovies = results[1];
+        _exMovies = results[2];
+        _horrorMovies = results[3];
+        _indieMovies = results[4];
+        _isLoading = false;
+      });
+    }
+  }
+
+  void _onSearchChanged(String query) {
+    setState(() {}); // X ikonunun görünürlüğünü güncellemek için
+    _debounce?.cancel();
+
+    if (query.trim().length < 2) {
+      setState(() {
+        _isSearching = false;
+        _searchResults = [];
+      });
+      return;
+    }
+
+    _debounce = Timer(const Duration(milliseconds: 500), () async {
+      setState(() => _isSearching = true);
+      final results = await ApiService.searchMovies(query);
+      if (mounted) {
+        setState(() {
+          _searchResults = results;
+          _isSearching = false;
+        });
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
+    final bool hasSearchQuery = _searchController.text.trim().length >= 2;
+
     return Scaffold(
       backgroundColor: const Color(0xFF0F0F0F),
       appBar: AppBar(
@@ -322,49 +319,204 @@ class MovieRadarScreen extends StatelessWidget {
             color: const Color(0xFF1E1E1E),
             borderRadius: BorderRadius.circular(12),
           ),
-          child: const TextField(
+          child: TextField(
+            controller: _searchController,
+            onChanged: _onSearchChanged,
             decoration: InputDecoration(
-              hintText: "Sen Ne İzliyorsun?",
-              hintStyle: TextStyle(color: Colors.grey, fontSize: 14),
-              prefixIcon: Icon(Icons.search, color: Colors.redAccent),
+              hintText: "Ne izliyorsun?",
+              hintStyle: const TextStyle(color: Colors.grey, fontSize: 14),
+              prefixIcon: const Icon(Icons.search, color: Colors.redAccent),
+              suffixIcon: _searchController.text.isNotEmpty
+                  ? IconButton(
+                      icon:
+                          const Icon(Icons.clear, color: Colors.grey, size: 20),
+                      onPressed: () {
+                        setState(() {
+                          _searchController.clear();
+                          _onSearchChanged("");
+                        });
+                      },
+                    )
+                  : null,
               border: InputBorder.none,
-              contentPadding: EdgeInsets.symmetric(vertical: 10),
+              contentPadding: const EdgeInsets.symmetric(vertical: 10),
             ),
+            style: const TextStyle(color: Colors.white),
           ),
         ),
       ),
-      body: SingleChildScrollView(
-        physics: const AlwaysScrollableScrollPhysics(),
+      body: _isLoading
+          ? const Center(
+              child: CircularProgressIndicator(color: Colors.redAccent))
+          : hasSearchQuery
+              ? _buildSearchResults()
+              : _buildTrendingView(),
+    );
+  }
+
+  // ── ARAMA SONUÇLARI ────────────────────────────────────────
+  Widget _buildSearchResults() {
+    if (_isSearching) {
+      return const Center(
+          child: CircularProgressIndicator(color: Colors.redAccent));
+    }
+
+    if (_searchResults.isEmpty) {
+      return const Center(
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const SizedBox(height: 8),
-            _buildCategory("🔴 Şu An Çok İzlenenler", _trending),
-            _buildCategory("🎬 Yeni Çıkanlar", _newReleases),
-            _buildCategory("🌙 Gece Mood'u", _nightMood),
-            _buildCategory("🏆 Tüm Zamanların Klasikleri", _classics),
-            _buildCategory("😱 Korku & Gerilim", _horror),
-            const SizedBox(height: 24),
+            Icon(Icons.search_off, color: Colors.grey, size: 60),
+            SizedBox(height: 12),
+            Text("Sonuç bulunamadı",
+                style: TextStyle(color: Colors.grey, fontSize: 16)),
           ],
         ),
-      ),
-      bottomNavigationBar: BottomNavigationBar(
-        backgroundColor: Colors.black,
-        selectedItemColor: Colors.redAccent,
-        unselectedItemColor: Colors.grey,
-        currentIndex: 0,
-        items: const [
-          BottomNavigationBarItem(
-              icon: Icon(Icons.home_filled), label: "Anasayfa"),
-          BottomNavigationBarItem(icon: Icon(Icons.search), label: "Ara"),
-          BottomNavigationBarItem(icon: Icon(Icons.person), label: "Hesap"),
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.all(16),
+      itemCount: _searchResults.length,
+      itemBuilder: (context, index) {
+        return _buildSearchResultCard(_searchResults[index]);
+      },
+    );
+  }
+
+  Widget _buildSearchResultCard(Movie movie) {
+    return GestureDetector(
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => MovieDetailScreen(movie: movie),
+            ),
+          );
+        },
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1A1A1A),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Row(
+            children: [
+              // Poster
+              ClipRRect(
+                borderRadius:
+                    const BorderRadius.horizontal(left: Radius.circular(14)),
+                child: movie.posterUrl.isNotEmpty
+                    ? Image.network(
+                        movie.posterUrl,
+                        width: 90,
+                        height: 130,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => Container(
+                          width: 90,
+                          height: 130,
+                          color: const Color(0xFF2A2A2A),
+                          child: const Icon(Icons.movie, color: Colors.grey),
+                        ),
+                      )
+                    : Container(
+                        width: 90,
+                        height: 130,
+                        color: const Color(0xFF2A2A2A),
+                        child: const Icon(Icons.movie, color: Colors.grey),
+                      ),
+              ),
+              // Film Bilgileri
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        movie.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      if (movie.releaseYear.isNotEmpty)
+                        Text(
+                          movie.releaseYear,
+                          style:
+                              const TextStyle(color: Colors.grey, fontSize: 13),
+                        ),
+                      const SizedBox(height: 4),
+                      Text(
+                        movie.genreNames,
+                        style: const TextStyle(
+                          color: Colors.redAccent,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          const Icon(Icons.star, size: 14, color: Colors.amber),
+                          const SizedBox(width: 4),
+                          Text(
+                            movie.voteAverage.toStringAsFixed(1),
+                            style: const TextStyle(
+                                color: Colors.white70, fontSize: 13),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        movie.overview,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            color: Colors.white38, fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ));
+  }
+
+  // ── TREND FİLMLER (ANA SAYFA) ──────────────────────────────
+  Widget _buildTrendingView() {
+    // Trend filmleri 10'arlık gruplara böl
+    final List<Movie> topTrending = _trendingMovies.take(10).toList();
+    final List<Movie> restTrending =
+        _trendingMovies.length > 10 ? _trendingMovies.sublist(10) : [];
+
+    return SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SizedBox(height: 8),
+          _buildCategory("🔴 Şu An Popüler", topTrending),
+          if (restTrending.isNotEmpty)
+            _buildCategory("🎬 Daha Fazla Keşfet", restTrending),
+          _buildCategory("🌌 Bilim Kurgu & Gizem", _mindfuckMovies),
+          _buildCategory("💔 Dram & Romantik", _exMovies),
+          _buildCategory("🩸 Korku & Gerilim", _horrorMovies),
+          _buildCategory("🍿 Müzik & Tarih", _indieMovies),
+          const SizedBox(height: 24),
         ],
       ),
     );
   }
 
-  // Kategori bölümü: başlık + 200px yüksekliğinde yatay kaydırmalı şerit
-  Widget _buildCategory(String title, List<Map<String, dynamic>> movies) {
+  Widget _buildCategory(String title, List<Movie> movies) {
+    if (movies.isEmpty) return const SizedBox.shrink();
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -395,97 +547,153 @@ class MovieRadarScreen extends StatelessWidget {
     );
   }
 
-  // Film kartı: sabit 135px genişlik, 200px yükseklik, afiş + gradient + bilgi
-  Widget _buildMovieCard(Map<String, dynamic> movie) {
-    return Container(
-      width: 135,
-      margin: const EdgeInsets.only(right: 12),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(14),
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            // Afiş görseli
-            Image.network(
-              movie['poster'],
-              fit: BoxFit.cover,
-              loadingBuilder: (context, child, loadingProgress) {
-                if (loadingProgress == null) return child;
-                return Container(
-                  color: const Color(0xFF1E1E1E),
-                  child: const Center(
-                    child: CircularProgressIndicator(
-                        color: Colors.redAccent, strokeWidth: 2),
-                  ),
-                );
-              },
-              errorBuilder: (context, error, stackTrace) => Container(
-                color: const Color(0xFF1E1E1E),
-                child: const Icon(Icons.broken_image,
-                    color: Colors.grey, size: 40),
-              ),
+  Widget _buildMovieCard(Movie movie) {
+    return GestureDetector(
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => MovieDetailScreen(movie: movie),
             ),
-            // Alt karartma gradyanı
-            Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  stops: const [0.45, 1.0],
-                  colors: [
-                    Colors.transparent,
-                    Colors.black.withOpacity(0.88),
-                  ],
-                ),
-              ),
-            ),
-            // Platform rozeti (sol üst)
-            Positioned(
-              top: 8,
-              left: 8,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.72),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Text(
-                  movie['platform'],
-                  style: const TextStyle(
-                    color: Colors.redAccent,
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            ),
-            // Film adı + izleyici sayısı (sol alt)
-            Positioned(
-              bottom: 8,
-              left: 8,
-              right: 8,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    movie['title'],
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 13,
-                      fontWeight: FontWeight.bold,
-                      height: 1.2,
+          );
+        },
+        child: Container(
+          width: 135,
+          margin: const EdgeInsets.only(right: 12),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(14),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                // Afiş görseli
+                movie.posterUrl.isNotEmpty
+                    ? Image.network(
+                        movie.posterUrl,
+                        fit: BoxFit.cover,
+                        loadingBuilder: (context, child, loadingProgress) {
+                          if (loadingProgress == null) return child;
+                          return Container(
+                            color: const Color(0xFF1E1E1E),
+                            child: const Center(
+                              child: CircularProgressIndicator(
+                                  color: Colors.redAccent, strokeWidth: 2),
+                            ),
+                          );
+                        },
+                        errorBuilder: (_, __, ___) => Container(
+                          color: const Color(0xFF1E1E1E),
+                          child: const Icon(Icons.broken_image,
+                              color: Colors.grey, size: 40),
+                        ),
+                      )
+                    : Container(
+                        color: const Color(0xFF1E1E1E),
+                        child: const Icon(Icons.movie,
+                            color: Colors.grey, size: 40),
+                      ),
+                // Alt karartma gradyanı
+                Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      stops: const [0.45, 1.0],
+                      colors: [
+                        Colors.transparent,
+                        Colors.black.withOpacity(0.88),
+                      ],
                     ),
                   ),
-                  const SizedBox(height: 4),
-                  Row(
+                ),
+                // Puan rozeti (sol üst)
+                Positioned(
+                  top: 8,
+                  left: 8,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.72),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.star, size: 10, color: Colors.amber),
+                        const SizedBox(width: 3),
+                        Text(
+                          movie.voteAverage.toStringAsFixed(1),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                // Canlı İzleyici Rozeti (Sağ üst)
+                if (movie.watcherCount > 0)
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.72),
+                        border: Border.all(
+                            color: Colors.redAccent.withOpacity(0.8), width: 1),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 6,
+                            height: 6,
+                            decoration: const BoxDecoration(
+                              color: Colors.redAccent,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            "${movie.watcherCount} İzliyor",
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 9,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                // Film adı + yıl (sol alt)
+                Positioned(
+                  bottom: 8,
+                  left: 8,
+                  right: 8,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(Icons.bolt, size: 12, color: Colors.redAccent),
-                      const SizedBox(width: 3),
                       Text(
-                        "${movie['watchers']} izliyor",
+                        movie.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                          height: 1.2,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        movie.releaseYear,
                         style: const TextStyle(
                           color: Colors.white70,
                           fontSize: 11,
@@ -493,12 +701,10 @@ class MovieRadarScreen extends StatelessWidget {
                       ),
                     ],
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
-          ],
-        ),
-      ),
-    );
+          ),
+        ));
   }
 }

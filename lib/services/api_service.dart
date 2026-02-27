@@ -1,6 +1,8 @@
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import '../models/movie.dart';
+import 'auth_service.dart';
 
 /// Go backend'e istek atan servis katmanı
 /// Flutter hiçbir zaman doğrudan TMDB'ye istek atmaz
@@ -79,6 +81,600 @@ class ApiService {
       return [];
     } catch (e) {
       return [];
+    }
+  }
+
+  static Future<Map<String, dynamic>?> getProfile() async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) {
+      return null;
+    }
+
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/api/profile'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Profil bilgilerini (açıklama ve/veya avatar) günceller
+  static Future<Map<String, dynamic>?> updateProfile({
+    String? description,
+    Uint8List? imageBytes,
+    String? imageFileName,
+  }) async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return null;
+
+    try {
+      final request = http.MultipartRequest(
+        'POST',
+        Uri.parse('$baseUrl/api/profile'),
+      );
+
+      request.headers['Authorization'] = 'Bearer $token';
+
+      if (description != null) {
+        request.fields['description'] = description;
+      }
+
+      if (imageBytes != null && imageFileName != null) {
+        request.files.add(
+          http.MultipartFile.fromBytes('avatar', imageBytes,
+              filename: imageFileName),
+        );
+      }
+
+      final streamed = await request.send();
+      final response = await http.Response.fromStream(streamed);
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+
+      return {'error': 'Güncelleme başarısız: ${response.statusCode}'};
+    } catch (e) {
+      return {'error': 'Güncelleme sırasında hata: $e'};
+    }
+  }
+
+  /// Kullanıcının anlık izleme durumunu getir
+  static Future<Map<String, dynamic>?> getMyWatchStatus() async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return null;
+
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/api/status/me'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Aktif kullanıcıların izlediği en popüler filmleri getir (posterPath dolu olanlar)
+  static Future<List<Map<String, dynamic>>> getTopActiveMovies({
+    int limit = 10,
+  }) async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return [];
+
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/api/status/top-movies?limit=$limit'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      ).timeout(const Duration(milliseconds: 1500));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final List raw = data['movies'] ?? [];
+        return raw
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
+      }
+
+      return [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Username'e göre kullanıcı ara
+  static Future<List<Map<String, dynamic>>> searchUsers(String query) async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return [];
+
+    final cleanQuery = query.trim();
+    if (cleanQuery.length < 2) return [];
+
+    try {
+      final response = await http.get(
+        Uri.parse(
+            '$baseUrl/api/users/search?q=${Uri.encodeComponent(cleanQuery)}'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      ).timeout(const Duration(milliseconds: 1500));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final List raw = data['users'] ?? [];
+        return raw
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
+      }
+      return [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Başka bir kullanıcının profilini getir
+  static Future<Map<String, dynamic>?> getUserProfile(
+      String targetUserId) async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return null;
+
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/api/users/$targetUserId'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      ).timeout(const Duration(milliseconds: 2000));
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// İzleme durumu belirle
+  static Future<bool> setWatchStatus({
+    required int tmdbId,
+    required String movieName,
+    required String posterPath,
+  }) async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return false;
+
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/api/status'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({
+          'tmdbId': tmdbId,
+          'movieName': movieName,
+          'posterPath': posterPath,
+        }),
+      );
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// İzlemeyi bitir
+  static Future<bool> removeWatchStatus() async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return false;
+
+    try {
+      final response = await http.delete(
+        Uri.parse('$baseUrl/api/status'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// İzleme durumunu yenile (Heartbeat)
+  static Future<bool> heartbeatStatus() async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return false;
+
+    try {
+      // PATCH isteği
+      final response = await http.patch(
+        Uri.parse('$baseUrl/api/status/heartbeat'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Arkadaşlık isteği gönder (karşılıklı onay mantığı backend'de)
+  /// Dönen map: { "status": "pending" | "friends", "message": "..." }
+  static Future<Map<String, dynamic>?> sendFriendRequest(
+      String targetUserId) async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return null;
+
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/api/friends/request'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({'targetUserId': targetUserId}),
+      );
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+      // Hata durumunda da mesajı dön
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// İki kullanıcı arasındaki arkadaşlık durumunu sorgula
+  /// Döner: "none" | "pending_sent" | "pending_received" | "friends"
+  static Future<String> getFriendStatus(String targetUserId) async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return 'none';
+
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/api/friends/status/$targetUserId'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        return (data['status'] ?? 'none').toString();
+      }
+      return 'none';
+    } catch (_) {
+      return 'none';
+    }
+  }
+
+  /// Arkadaş listesini getir
+  static Future<List<Map<String, dynamic>>> getFriends() async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return [];
+
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/api/friends'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final List raw = data['friends'] ?? [];
+        return raw.map((e) => e as Map<String, dynamic>).toList();
+      }
+      return [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Arkadaşlıktan çıkar veya gelen/giden isteği iptal et
+  static Future<bool> removeFriend(String targetUserId) async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return false;
+
+    try {
+      final response = await http.delete(
+        Uri.parse('$baseUrl/api/friends/$targetUserId'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Kullanıcıyı engelle
+  static Future<bool> blockUser(String targetUserId) async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return false;
+
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/api/users/block/$targetUserId'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Eşleşmeyi iptal et
+  static Future<bool> unmatchUser(String targetUserId) async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return false;
+
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/api/users/unmatch/$targetUserId'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Yeni Liste (Kategori) Oluştur
+  static Future<Map<String, dynamic>?> createList({
+    required String name,
+    required String description,
+    bool isPublic = true,
+  }) async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return null;
+
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/api/lists/'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({
+          'name': name,
+          'description': description,
+          'isPublic': isPublic,
+        }),
+      );
+
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Kullanıcının kendi (kategori) listelerini getir
+  static Future<List<Map<String, dynamic>>> getMyLists() async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return [];
+
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/api/lists/my'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final List raw = jsonDecode(response.body);
+        return raw.cast<Map<String, dynamic>>();
+      }
+      return [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Bir listeye ait içerikleri/filmleri getir
+  static Future<List<Map<String, dynamic>>> getListItems(String listId) async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return [];
+
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/api/lists/$listId/items'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final List raw = jsonDecode(response.body);
+        return raw.cast<Map<String, dynamic>>();
+      }
+      return [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Bir filme ait özel listeye film ekler
+  static Future<Map<String, dynamic>?> addMovieToList({
+    required String listId,
+    required int tmdbId,
+    required String movieName,
+    required String posterUrl,
+  }) async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return null;
+
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/api/lists/items'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({
+          'listId': listId,
+          'tmdbId': tmdbId,
+          'movieName': movieName,
+          'posterUrl': posterUrl,
+        }),
+      );
+
+      if (response.statusCode == 409 ||
+          response.statusCode == 400 ||
+          response.statusCode == 403 ||
+          response.statusCode == 200) {
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+
+      return {'error': 'Ekleme başarısız: ${response.statusCode}'};
+    } catch (e) {
+      return {'error': 'Sistem hatası: $e'};
+    }
+  }
+
+  /// Letterboxd dosyasını parse edip önizleme üretir (ZIP veya CSV)
+  static Future<Map<String, dynamic>?> previewLetterboxdImport({
+    required String fileName,
+    required Uint8List bytes,
+  }) async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return null;
+
+    try {
+      final request = http.MultipartRequest(
+        'POST',
+        Uri.parse('$baseUrl/api/lists/import/preview'),
+      );
+
+      request.headers['Authorization'] = 'Bearer $token';
+      request.files.add(
+        http.MultipartFile.fromBytes('file', bytes, filename: fileName),
+      );
+
+      final streamed = await request.send();
+      final response = await http.Response.fromStream(streamed);
+
+      Map<String, dynamic>? data;
+      try {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map<String, dynamic>) {
+          data = decoded;
+        }
+      } catch (_) {}
+
+      if (response.statusCode == 200 && data != null) return data;
+
+      if (data != null) {
+        return {
+          'error': (data['error'] ?? 'Onizleme alinamadi').toString(),
+          'errorCode': (data['errorCode'] ?? '').toString(),
+          'statusCode': response.statusCode,
+        };
+      }
+
+      return {
+        'error':
+            'Onizleme hatasi (HTTP ${response.statusCode}): ${response.body}',
+        'statusCode': response.statusCode,
+      };
+    } catch (e) {
+      return {'error': 'Onizleme sirasinda baglanti hatasi: $e'};
+    }
+  }
+
+  /// Letterboxd importunu commit eder
+  static Future<Map<String, dynamic>?> commitLetterboxdImport({
+    required String previewToken,
+    String strategy = 'merge',
+  }) async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return null;
+
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/api/lists/import/commit'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({
+          'previewToken': previewToken,
+          'strategy': strategy,
+        }),
+      );
+
+      Map<String, dynamic>? data;
+      try {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map<String, dynamic>) {
+          data = decoded;
+        }
+      } catch (_) {}
+
+      if (response.statusCode == 200 && data != null) return data;
+
+      if (data != null) {
+        return {
+          'error': (data['error'] ?? 'Import islemi basarisiz').toString(),
+          'errorCode': (data['errorCode'] ?? '').toString(),
+          'statusCode': response.statusCode,
+        };
+      }
+
+      return {
+        'error':
+            'Import hatasi (HTTP ${response.statusCode}): ${response.body}',
+        'statusCode': response.statusCode,
+      };
+    } catch (e) {
+      return {'error': 'Import sirasinda baglanti hatasi: $e'};
     }
   }
 }

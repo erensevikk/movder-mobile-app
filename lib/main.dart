@@ -4,10 +4,15 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'models/movie.dart';
 import 'services/api_service.dart';
+import 'services/auth_service.dart';
 import 'screens/movie_detail_screen.dart';
+import 'screens/chat_list_screen.dart';
 import 'screens/profile_screen.dart';
+import 'screens/match_screen.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await AuthService.init();
   runApp(const MovderApp());
 }
 
@@ -44,12 +49,8 @@ class _MainNavigatorScreenState extends State<MainNavigatorScreen> {
 
   final List<Widget> _pages = [
     const MovieRadarScreen(), // Film Radar sayfası artık Anasayfa oldu
-    const Center(
-        child: Text("Eşleşme Ara (Yakında)",
-            style: TextStyle(color: Colors.white, fontSize: 18))),
-    const Center(
-        child: Text("Sohbetler",
-            style: TextStyle(color: Colors.white))), // TODO: Chat Screen
+    const MatchScreen(), // Yeni kodlanan Eşleşme arama ekranı
+    const ChatListScreen(),
     const ProfileScreen(), // Yeni kodlanan Profil/Hesabım ekranı
   ];
 
@@ -109,30 +110,319 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
+  final TextEditingController _confirmPasswordController =
+      TextEditingController();
+  final TextEditingController _birthDateController = TextEditingController();
 
+  DateTime? _selectedBirthDate;
+  String? _selectedCity;
+  final GlobalKey _cityFieldKey = GlobalKey();
+  final ScrollController _kvkkScrollController = ScrollController();
+
+  static const int _minimumAge = 16;
+
+  static const List<String> _turkiyeIlleri = [
+    'Adana',
+    'Adıyaman',
+    'Afyonkarahisar',
+    'Ağrı',
+    'Amasya',
+    'Ankara',
+    'Antalya',
+    'Artvin',
+    'Aydın',
+    'Balıkesir',
+    'Bilecik',
+    'Bingöl',
+    'Bitlis',
+    'Bolu',
+    'Burdur',
+    'Bursa',
+    'Çanakkale',
+    'Çankırı',
+    'Çorum',
+    'Denizli',
+    'Diyarbakır',
+    'Edirne',
+    'Elazığ',
+    'Erzincan',
+    'Erzurum',
+    'Eskişehir',
+    'Gaziantep',
+    'Giresun',
+    'Gümüşhane',
+    'Hakkâri',
+    'Hatay',
+    'Isparta',
+    'Mersin',
+    'İstanbul',
+    'İzmir',
+    'Kars',
+    'Kastamonu',
+    'Kayseri',
+    'Kırklareli',
+    'Kırşehir',
+    'Kocaeli',
+    'Konya',
+    'Kütahya',
+    'Malatya',
+    'Manisa',
+    'Kahramanmaraş',
+    'Mardin',
+    'Muğla',
+    'Muş',
+    'Nevşehir',
+    'Niğde',
+    'Ordu',
+    'Rize',
+    'Sakarya',
+    'Samsun',
+    'Siirt',
+    'Sinop',
+    'Sivas',
+    'Tekirdağ',
+    'Tokat',
+    'Trabzon',
+    'Tunceli',
+    'Şanlıurfa',
+    'Uşak',
+    'Van',
+    'Yozgat',
+    'Zonguldak',
+    'Aksaray',
+    'Bayburt',
+    'Karaman',
+    'Kırıkkale',
+    'Batman',
+    'Şırnak',
+    'Bartın',
+    'Ardahan',
+    'Iğdır',
+    'Yalova',
+    'Karabük',
+    'Kilis',
+    'Osmaniye',
+    'Düzce',
+  ];
+
+  bool _kvkkApproved = false;
+  bool _termsApproved = false;
   bool _isLoading = false;
+  bool _isPasswordObscured = true;
+  bool _isConfirmPasswordObscured = true;
+
+  String? _usernameError;
+  String? _emailError;
+  String? _passwordError;
+  String? _confirmPasswordError;
+  String? _cityError;
+  String? _birthDateError;
+  String? _kvkkError;
+  String? _termsError;
+
+  @override
+  void initState() {
+    super.initState();
+    final now = DateTime.now();
+    _selectedBirthDate = now;
+    _birthDateController.text =
+        '${now.day.toString().padLeft(2, '0')}.${now.month.toString().padLeft(2, '0')}.${now.year.toString().padLeft(4, '0')}';
+  }
 
   Future<void> _register() async {
+    final username = _usernameController.text.trim();
+    final email = _emailController.text.trim();
+    final password = _passwordController.text;
+    final confirmPassword = _confirmPasswordController.text;
+    final city = _selectedCity;
+    final birthDate = _selectedBirthDate;
+    final currentYear = DateTime.now().year;
+
+    setState(() {
+      _usernameError = null;
+      _emailError = null;
+      _passwordError = null;
+      _confirmPasswordError = null;
+      _cityError = null;
+      _birthDateError = null;
+      _kvkkError = null;
+      _termsError = null;
+    });
+
+    debugPrint(
+      'Register submit -> username:$username, email:$email, city:$city, birthDate:$birthDate, kvkk:$_kvkkApproved, terms:$_termsApproved',
+    );
+
+    String? usernameError;
+    String? emailError;
+    String? passwordError;
+    String? confirmPasswordError;
+    String? cityError;
+    String? birthDateError;
+    String? kvkkError;
+    String? termsError;
+
+    if (username.isEmpty) {
+      usernameError = 'Kullanıcı adı zorunlu.';
+    }
+
+    if (email.isEmpty) {
+      emailError = 'E-posta zorunlu.';
+    } else if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email)) {
+      emailError = 'Geçerli bir e-posta adresi girin.';
+    }
+
+    if (password.isEmpty) {
+      passwordError = 'Şifre zorunlu.';
+    } else if (password.length < 6) {
+      passwordError = 'Şifre en az 6 karakter olmalı.';
+    } else if (!RegExp(r'[A-Z]').hasMatch(password)) {
+      passwordError = 'Şifre en az 1 büyük harf içermeli.';
+    }
+
+    if (confirmPassword.isEmpty) {
+      confirmPasswordError = 'Şifre tekrar zorunlu.';
+    } else if (password.isNotEmpty && password != confirmPassword) {
+      confirmPasswordError = 'Şifreler eşleşmiyor.';
+    }
+
+    if (city == null) {
+      cityError = 'Şehir seçmelisin.';
+    }
+
+    if (birthDate == null) {
+      birthDateError = 'Doğum tarihi seçmelisin.';
+    } else {
+      if (birthDate.year < 1900 || birthDate.year > currentYear) {
+        birthDateError = 'Geçerli bir doğum tarihi seçin.';
+      } else {
+        int age = currentYear - birthDate.year;
+        final hadBirthdayThisYear = (DateTime.now().month > birthDate.month) ||
+            (DateTime.now().month == birthDate.month &&
+                DateTime.now().day >= birthDate.day);
+        if (!hadBirthdayThisYear) {
+          age -= 1;
+        }
+
+        if (age < _minimumAge) {
+          birthDateError = 'Kayıt için en az $_minimumAge yaşında olmalısın.';
+        }
+      }
+    }
+
+    if (!_kvkkApproved) {
+      kvkkError = 'KVKK onayı zorunlu.';
+    }
+
+    if (!_termsApproved) {
+      termsError = 'Kullanım şartları onayı zorunlu.';
+    }
+
+    if (usernameError != null ||
+        emailError != null ||
+        passwordError != null ||
+        confirmPasswordError != null ||
+        cityError != null ||
+        birthDateError != null ||
+        kvkkError != null ||
+        termsError != null) {
+      setState(() {
+        _usernameError = usernameError;
+        _emailError = emailError;
+        _passwordError = passwordError;
+        _confirmPasswordError = confirmPasswordError;
+        _cityError = cityError;
+        _birthDateError = birthDateError;
+        _kvkkError = kvkkError;
+        _termsError = termsError;
+      });
+      return;
+    }
+
     setState(() => _isLoading = true);
     final url = Uri.parse('http://10.0.2.2:8080/register');
+
     try {
       final response = await http.post(
         url,
         headers: {"Content-Type": "application/json"},
         body: jsonEncode({
-          "username": _usernameController.text,
-          "email": _emailController.text,
-          "password": _passwordController.text,
+          "username": username,
+          "email": email,
+          "password": password,
+          "city": city,
+          "birthYear": birthDate!.year,
+          "birthDate":
+              '${birthDate.year.toString().padLeft(4, '0')}-${birthDate.month.toString().padLeft(2, '0')}-${birthDate.day.toString().padLeft(2, '0')}',
+          "kvkkApproved": _kvkkApproved,
+          "termsApproved": _termsApproved,
         }),
       );
+
+      debugPrint(
+        'Register response -> status:${response.statusCode}, body:${response.body}',
+      );
+
       if (response.statusCode == 201) {
         final data = jsonDecode(response.body);
-        _showSnackBar("Başarılı! ID: ${data['userId']}", Colors.green);
+        final token = (data['token'] ?? '').toString();
+
+        if (token.isNotEmpty) {
+          await AuthService.saveToken(token);
+        }
+
+        debugPrint(
+          'Register success payload -> message:${data['message']}, userId:${data['userId']}, tokenSaved:${token.isNotEmpty}',
+        );
+        await _showRegistrationSuccessDialog();
       } else {
         final data = jsonDecode(response.body);
-        _showSnackBar(data['error'] ?? "Bir hata oluştu", Colors.red);
+        final String errorMessage =
+            (data['error'] ?? 'Bir hata oluştu').toString().toLowerCase();
+        final String field = (data['field'] ?? '').toString().toLowerCase();
+        final List<String> fields = (data['fields'] is List)
+            ? (data['fields'] as List)
+                .map((e) => e.toString().toLowerCase())
+                .toList()
+            : const [];
+
+        final bool usernameTaken = fields.contains('username') ||
+            field == 'username' ||
+            errorMessage.contains('kullanıcı adı') ||
+            errorMessage.contains('username') ||
+            (errorMessage.contains('duplicate') &&
+                errorMessage.contains('username'));
+
+        final bool emailTaken = fields.contains('email') ||
+            field == 'email' ||
+            errorMessage.contains('e-posta') ||
+            errorMessage.contains('email') ||
+            (errorMessage.contains('duplicate') &&
+                errorMessage.contains('email'));
+
+        debugPrint(
+          'Register parse -> field:$field, fields:$fields, usernameTaken:$usernameTaken, emailTaken:$emailTaken',
+        );
+
+        if (usernameTaken || emailTaken) {
+          setState(() {
+            if (usernameTaken) {
+              _usernameError = 'Kullanıcı adı zaten alınmış.';
+            }
+            if (emailTaken) {
+              _emailError = 'Bu e-posta adresi zaten kullanılıyor.';
+            }
+          });
+          return;
+        }
+
+        final detail = (data['detail'] ?? '').toString();
+        final baseError = (data['error'] ?? 'Bir hata oluştu').toString();
+        final message = detail.isEmpty ? baseError : '$baseError\n$detail';
+        _showSnackBar(message, Colors.red);
       }
     } catch (e) {
+      debugPrint('Register exception -> $e');
       _showSnackBar("Sunucuya ulaşılamadı. Go açık mı?", Colors.orange);
     } finally {
       setState(() => _isLoading = false);
@@ -143,6 +433,62 @@ class _RegisterScreenState extends State<RegisterScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message), backgroundColor: color),
     );
+  }
+
+  Future<void> _showRegistrationSuccessDialog() async {
+    if (!mounted) return;
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1E1E1E),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Row(
+            children: [
+              Icon(Icons.check_circle, color: Colors.greenAccent),
+              SizedBox(width: 8),
+              Text(
+                'Kayıt Başarılı',
+                style: TextStyle(color: Colors.white),
+              ),
+            ],
+          ),
+          content: const Text(
+            'Başarıyla kayıt olundu. Movder\'ın eşsiz deneyimine hoş geldiniz.',
+            style: TextStyle(color: Colors.white70, height: 1.4),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Devam Et',
+                  style: TextStyle(color: Colors.redAccent)),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (!mounted) return;
+    debugPrint(
+      'Post-register navigation -> MainNavigatorScreen. sessionState: token mevcut=${AuthService.isLoggedIn}',
+    );
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(builder: (_) => const MainNavigatorScreen()),
+    );
+  }
+
+  @override
+  void dispose() {
+    _usernameController.dispose();
+    _emailController.dispose();
+    _passwordController.dispose();
+    _confirmPasswordController.dispose();
+    _birthDateController.dispose();
+    _kvkkScrollController.dispose();
+    super.dispose();
   }
 
   @override
@@ -164,16 +510,143 @@ class _RegisterScreenState extends State<RegisterScreen> {
               const SizedBox(height: 10),
               const Text("Sinema tutkunlarıyla eşleşmeye hazır mısın?",
                   style: TextStyle(fontSize: 16, color: Colors.grey)),
-              const SizedBox(height: 50),
-              _buildTextField(
-                  _usernameController, "Kullanıcı Adı", Icons.person_outline),
-              const SizedBox(height: 20),
-              _buildTextField(
-                  _emailController, "E-posta", Icons.email_outlined),
-              const SizedBox(height: 20),
-              _buildTextField(_passwordController, "Şifre", Icons.lock_outline,
-                  isObscure: true),
               const SizedBox(height: 40),
+              _buildTextField(
+                _usernameController,
+                "Kullanıcı Adı",
+                Icons.person_outline,
+                errorText: _usernameError,
+                onChanged: (_) {
+                  if (_usernameError != null) {
+                    setState(() => _usernameError = null);
+                  }
+                },
+              ),
+              const SizedBox(height: 16),
+              _buildTextField(
+                _emailController,
+                "E-posta",
+                Icons.email_outlined,
+                keyboardType: TextInputType.emailAddress,
+                errorText: _emailError,
+                onChanged: (_) {
+                  if (_emailError != null) {
+                    setState(() => _emailError = null);
+                  }
+                },
+              ),
+              const SizedBox(height: 16),
+              _buildTextField(
+                _passwordController,
+                "Şifre",
+                Icons.lock_outline,
+                isObscure: _isPasswordObscured,
+                suffixIcon: _isPasswordObscured
+                    ? Icons.visibility_off_outlined
+                    : Icons.visibility_outlined,
+                onSuffixIconTap: () {
+                  setState(() {
+                    _isPasswordObscured = !_isPasswordObscured;
+                  });
+                },
+                errorText: _passwordError,
+                onChanged: (_) {
+                  if (_passwordError != null) {
+                    setState(() => _passwordError = null);
+                  }
+                },
+              ),
+              const SizedBox(height: 16),
+              _buildTextField(
+                _confirmPasswordController,
+                "Şifre Tekrar",
+                Icons.lock_reset_outlined,
+                isObscure: _isConfirmPasswordObscured,
+                suffixIcon: _isConfirmPasswordObscured
+                    ? Icons.visibility_off_outlined
+                    : Icons.visibility_outlined,
+                onSuffixIconTap: () {
+                  setState(() {
+                    _isConfirmPasswordObscured = !_isConfirmPasswordObscured;
+                  });
+                },
+                errorText: _confirmPasswordError,
+                onChanged: (_) {
+                  if (_confirmPasswordError != null) {
+                    setState(() => _confirmPasswordError = null);
+                  }
+                },
+              ),
+              const SizedBox(height: 16),
+              _buildCityDropdown(errorText: _cityError),
+              const SizedBox(height: 16),
+              _buildBirthDatePicker(errorText: _birthDateError),
+              const SizedBox(height: 16),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                value: _kvkkApproved,
+                activeColor: Colors.redAccent,
+                checkColor: Colors.white,
+                title: Wrap(
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    GestureDetector(
+                      onTap: _showKvkkModal,
+                      child: const Text(
+                        'KVKK',
+                        style: TextStyle(
+                          color: Colors.redAccent,
+                          fontSize: 13,
+                          decoration: TextDecoration.underline,
+                        ),
+                      ),
+                    ),
+                    const Text(
+                      ' metnini okudum ve onaylıyorum.',
+                      style: TextStyle(color: Colors.white70, fontSize: 13),
+                    ),
+                  ],
+                ),
+                controlAffinity: ListTileControlAffinity.leading,
+                subtitle: _kvkkError == null
+                    ? null
+                    : Text(
+                        _kvkkError!,
+                        style: const TextStyle(
+                            color: Colors.redAccent, fontSize: 12),
+                      ),
+                onChanged: (value) {
+                  setState(() {
+                    _kvkkApproved = value ?? false;
+                    if (_kvkkApproved) _kvkkError = null;
+                  });
+                },
+              ),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                value: _termsApproved,
+                activeColor: Colors.redAccent,
+                checkColor: Colors.white,
+                title: const Text(
+                  'Kullanım şartlarını kabul ediyorum.',
+                  style: TextStyle(color: Colors.white70, fontSize: 13),
+                ),
+                controlAffinity: ListTileControlAffinity.leading,
+                subtitle: _termsError == null
+                    ? null
+                    : Text(
+                        _termsError!,
+                        style: const TextStyle(
+                            color: Colors.redAccent, fontSize: 12),
+                      ),
+                onChanged: (value) {
+                  setState(() {
+                    _termsApproved = value ?? false;
+                    if (_termsApproved) _termsError = null;
+                  });
+                },
+              ),
+              const SizedBox(height: 24),
               SizedBox(
                 width: double.infinity,
                 height: 55,
@@ -200,15 +673,290 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
+  void _showKvkkModal() {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (context) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.all(16),
+          child: Container(
+            height: MediaQuery.of(context).size.height * 0.72,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(18),
+              gradient: const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFF1D1D1F), Color(0xFF111214)],
+              ),
+              border: Border.all(color: Colors.white12),
+              boxShadow: const [
+                BoxShadow(
+                  color: Colors.black54,
+                  blurRadius: 18,
+                  offset: Offset(0, 8),
+                ),
+              ],
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(18, 16, 14, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.redAccent.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(
+                              color: Colors.redAccent.withOpacity(0.4)),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.verified_user_outlined,
+                                size: 14, color: Colors.redAccent),
+                            SizedBox(width: 6),
+                            Text(
+                              'KVKK',
+                              style: TextStyle(
+                                color: Colors.redAccent,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      const Expanded(
+                        child: Text(
+                          'Aydınlatma Metni',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        icon: const Icon(Icons.close_rounded,
+                            color: Colors.white70),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Container(
+                    height: 1,
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [
+                          Colors.transparent,
+                          Colors.white30,
+                          Colors.transparent
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Expanded(
+                    child: Scrollbar(
+                      controller: _kvkkScrollController,
+                      thumbVisibility: true,
+                      trackVisibility: true,
+                      interactive: true,
+                      radius: const Radius.circular(12),
+                      thickness: 6,
+                      child: SingleChildScrollView(
+                        controller: _kvkkScrollController,
+                        padding: const EdgeInsets.only(right: 6),
+                        child: const Text(
+                          'Movder, kullanıcıların film ve dizi deneyimlerini paylaşabildiği, anlık eşleşme ve sohbet özellikleri sunan bir platformdur.\n\n'
+                          'Bu kapsamda kayıt sırasında sağladığınız kullanıcı adı, e-posta adresi, şehir, doğum tarihi gibi kişisel veriler; hesap oluşturma, güvenli giriş, eşleşme deneyimini iyileştirme ve hizmet sürekliliği amaçlarıyla işlenir.\n\n'
+                          'Şifre bilgileriniz açık metin olarak tutulmaz; güvenlik standartlarına uygun şekilde şifrelenerek saklanır.\n\n'
+                          'Movder içerisinde film/dizi içerik görselleri ve meta verileri TMDB (The Movie Database) API üzerinden sağlanmaktadır. Bu kullanım yalnızca içerik keşfi ve profil deneyimini geliştirme amacı taşır. TMDB, Movder uygulamasını desteklememekte veya resmi olarak onaylamamaktadır.\n\n'
+                          'Kişisel verileriniz; yasal yükümlülükler ve hizmetin teknik gereklilikleri dışında üçüncü taraflarla paylaşılmaz. KVKK kapsamındaki erişim, düzeltme, silme ve itiraz haklarınızı Movder destek kanalları üzerinden kullanabilirsiniz.\n\n'
+                          'Bu metni onaylayarak, kişisel verilerinizin yukarıda belirtilen kapsamda işlenmesine açık rıza verdiğinizi beyan etmiş olursunuz.',
+                          style: TextStyle(
+                            color: Colors.white70,
+                            fontSize: 14,
+                            height: 1.55,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _selectBirthDate() async {
+    FocusScope.of(context).unfocus();
+
+    final now = DateTime.now();
+    final initialDate = _selectedBirthDate ?? now;
+
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initialDate,
+      firstDate: DateTime(1900, 1, 1),
+      lastDate: now,
+      helpText: 'Doğum Tarihi Seç',
+      cancelText: 'İptal',
+      confirmText: 'Seç',
+    );
+
+    if (picked != null) {
+      setState(() {
+        _selectedBirthDate = picked;
+        _birthDateError = null;
+        _birthDateController.text =
+            '${picked.day.toString().padLeft(2, '0')}.${picked.month.toString().padLeft(2, '0')}.${picked.year.toString().padLeft(4, '0')}';
+      });
+    }
+  }
+
+  Widget _buildBirthDatePicker({String? errorText}) {
+    return TextField(
+      controller: _birthDateController,
+      readOnly: true,
+      onTap: _selectBirthDate,
+      decoration: InputDecoration(
+        prefixIcon:
+            const Icon(Icons.calendar_today_outlined, color: Colors.redAccent),
+        hintText: 'Doğum Tarihi',
+        errorText: errorText,
+        errorStyle: const TextStyle(color: Colors.redAccent),
+        filled: true,
+        fillColor: const Color(0xFF1E1E1E),
+        border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(15),
+            borderSide: BorderSide.none),
+      ),
+    );
+  }
+
+  Future<void> _showCityMenu() async {
+    final fieldContext = _cityFieldKey.currentContext;
+    if (fieldContext == null) return;
+
+    final RenderBox fieldBox = fieldContext.findRenderObject() as RenderBox;
+    final RenderBox overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox;
+
+    final Offset fieldPosition =
+        fieldBox.localToGlobal(Offset.zero, ancestor: overlay);
+
+    final RelativeRect position = RelativeRect.fromRect(
+      Rect.fromLTWH(
+        fieldPosition.dx,
+        fieldPosition.dy + fieldBox.size.height + 2,
+        fieldBox.size.width,
+        0,
+      ),
+      Offset.zero & overlay.size,
+    );
+
+    final selected = await showMenu<String>(
+      context: context,
+      position: position,
+      color: const Color(0xFF1E1E1E),
+      constraints: BoxConstraints(
+        minWidth: fieldBox.size.width,
+        maxWidth: fieldBox.size.width,
+        maxHeight: 192,
+      ),
+      items: _turkiyeIlleri
+          .map(
+            (city) => PopupMenuItem<String>(
+              value: city,
+              child: Text(
+                city,
+                style: const TextStyle(color: Colors.white),
+              ),
+            ),
+          )
+          .toList(),
+    );
+
+    if (selected != null) {
+      setState(() {
+        _selectedCity = selected;
+      });
+    }
+  }
+
+  Widget _buildCityDropdown({String? errorText}) {
+    return InkWell(
+      key: _cityFieldKey,
+      borderRadius: BorderRadius.circular(15),
+      onTap: () async {
+        await _showCityMenu();
+        if (_selectedCity != null && _cityError != null) {
+          setState(() => _cityError = null);
+        }
+      },
+      child: InputDecorator(
+        decoration: InputDecoration(
+          prefixIcon:
+              const Icon(Icons.location_city_outlined, color: Colors.redAccent),
+          suffixIcon:
+              const Icon(Icons.arrow_drop_down_rounded, color: Colors.white70),
+          hintText: 'Şehir Seç',
+          errorText: errorText,
+          errorStyle: const TextStyle(color: Colors.redAccent),
+          filled: true,
+          fillColor: const Color(0xFF1E1E1E),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(15),
+            borderSide: BorderSide.none,
+          ),
+        ),
+        child: Text(
+          _selectedCity ?? 'Şehir Seç',
+          style: TextStyle(
+            color: _selectedCity == null ? Colors.white54 : Colors.white,
+            fontSize: 16,
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildTextField(
       TextEditingController controller, String hint, IconData icon,
-      {bool isObscure = false}) {
+      {bool isObscure = false,
+      TextInputType? keyboardType,
+      String? errorText,
+      ValueChanged<String>? onChanged,
+      IconData? suffixIcon,
+      VoidCallback? onSuffixIconTap}) {
     return TextField(
       controller: controller,
       obscureText: isObscure,
+      keyboardType: keyboardType,
+      onChanged: onChanged,
       decoration: InputDecoration(
         prefixIcon: Icon(icon, color: Colors.redAccent),
+        suffixIcon: suffixIcon == null
+            ? null
+            : IconButton(
+                onPressed: onSuffixIconTap,
+                icon: Icon(suffixIcon, color: Colors.white70),
+              ),
         hintText: hint,
+        errorText: errorText,
+        errorStyle: const TextStyle(color: Colors.redAccent),
         filled: true,
         fillColor: const Color(0xFF1E1E1E),
         border: OutlineInputBorder(

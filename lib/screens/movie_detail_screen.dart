@@ -1,7 +1,7 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import '../models/movie.dart';
 import '../services/api_service.dart';
+import '../services/watching_service.dart';
 
 class MovieDetailScreen extends StatefulWidget {
   final Movie movie;
@@ -14,12 +14,79 @@ class MovieDetailScreen extends StatefulWidget {
 
 class _MovieDetailScreenState extends State<MovieDetailScreen> {
   late Movie currentMovie;
+  bool _isWatchingThis = false;
+  bool _isLoadingWatchStatus = true;
 
   @override
   void initState() {
     super.initState();
     currentMovie = widget.movie;
     _fetchFullDetails();
+    _checkWatchStatus();
+  }
+
+  Future<void> _checkWatchStatus() async {
+    // Sadece bu filmi izleyip izlemediğini kontrol et
+    final statusData = await ApiService.getMyWatchStatus();
+    if (mounted) {
+      if (statusData != null && statusData['watching'] == true) {
+        final tmdbId = statusData['status']['tmdbId'];
+        if (tmdbId == currentMovie.id) {
+          setState(() {
+            _isWatchingThis = true;
+          });
+        }
+      }
+      setState(() {
+        _isLoadingWatchStatus = false;
+      });
+    }
+  }
+
+  Future<void> _toggleWatchStatus() async {
+    setState(() {
+      _isLoadingWatchStatus = true;
+    });
+
+    if (_isWatchingThis) {
+      // İzlemeyi bitir
+      final success = await WatchingService.instance.stopWatching();
+      if (success && mounted) {
+        setState(() {
+          _isWatchingThis = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('İzleme durumu sonlandırıldı.')),
+        );
+      }
+    } else {
+      // İzlemeye başla
+      final success = await WatchingService.instance.startWatching(
+        currentMovie.id,
+        currentMovie.title,
+        currentMovie.posterUrl,
+      );
+      if (success && mounted) {
+        setState(() {
+          _isWatchingThis = true;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content:
+                  Text('${currentMovie.title} izleniyor olarak işaretlendi!')),
+        );
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('İzleme durumu başlatılamadı.')),
+        );
+      }
+    }
+
+    if (mounted) {
+      setState(() {
+        _isLoadingWatchStatus = false;
+      });
+    }
   }
 
   Future<void> _fetchFullDetails() async {
@@ -247,20 +314,30 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       children: [
         Expanded(
           child: ElevatedButton.icon(
-            onPressed: () {
-              // TODO: Şu an izliyorum mantığı buraya eklenecek
-            },
-            icon: const Icon(Icons.play_circle_fill, color: Colors.white),
-            label: const Text(
-              "Şu an İzliyorum",
-              style: TextStyle(
+            onPressed: _isLoadingWatchStatus ? null : _toggleWatchStatus,
+            icon: _isLoadingWatchStatus
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                        color: Colors.white, strokeWidth: 2))
+                : Icon(
+                    _isWatchingThis
+                        ? Icons.stop_circle_rounded
+                        : Icons.play_circle_fill,
+                    color: Colors.white),
+            label: Text(
+              _isWatchingThis ? "İzlemeyi Bitir" : "Şu an İzliyorum",
+              style: const TextStyle(
                 color: Colors.white,
                 fontWeight: FontWeight.bold,
                 fontSize: 16,
               ),
             ),
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.redAccent,
+              backgroundColor: _isWatchingThis
+                  ? Colors.redAccent.shade700
+                  : Colors.redAccent,
               padding: const EdgeInsets.symmetric(vertical: 16),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),

@@ -13,6 +13,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/websocket"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // ─── WebSocket Yapılandırması ────────────────────────────────
@@ -30,12 +32,14 @@ var chatMu sync.RWMutex
 
 // ChatMessage — Sohbet mesajı yapısı
 type ChatMessage struct {
-	Type      string `json:"type"` // "message", "join", "leave"
-	UserID    string `json:"userId"`
-	Username  string `json:"username"`
-	Content   string `json:"content"`
-	Timestamp int64  `json:"timestamp"`
-	RoomID    string `json:"roomId"`
+	ID        primitive.ObjectID `json:"_id,omitempty" bson:"_id,omitempty"`
+	Type      string             `json:"type" bson:"type"` // "message", "join", "leave", "read_receipt"
+	UserID    string             `json:"userId" bson:"userId"`
+	Username  string             `json:"username" bson:"username"`
+	Content   string             `json:"content" bson:"content"`
+	Timestamp int64              `json:"timestamp" bson:"timestamp"`
+	RoomID    string             `json:"roomId" bson:"roomId"`
+	Status    string             `json:"status" bson:"status"` // "sent", "delivered", "read"
 }
 
 // HandleWebSocket — WebSocket bağlantı handler'ı
@@ -94,8 +98,32 @@ func HandleWebSocket() gin.HandlerFunc {
 				break // Bağlantı koptu
 			}
 
+			// Gelen mesaj yapısını parse et
+			var incoming struct {
+				Type    string `json:"type"`
+				Content string `json:"content"`
+			}
+
+			// Eğer sadece düz metin geldiyse varsayılan type'ı message kabul et
+			if err := json.Unmarshal(msg, &incoming); err != nil {
+				incoming.Type = "message"
+				incoming.Content = string(msg)
+			}
+
+			if incoming.Type == "read_receipt" {
+				// Kullanıcı mesajları okuduğunu bildirdi, MongoDB'de "read" olarak işaretle ve odadakilere haber ver
+				markMessagesAsRead(roomID, userId)
+				broadcastToRoom(roomID, ChatMessage{
+					Type:      "read_receipt",
+					UserID:    userId,
+					Timestamp: time.Now().Unix(),
+					RoomID:    roomID,
+				})
+				continue
+			}
+
 			// Mesaj boyutu kontrolü (max 1000 karakter)
-			content := string(msg)
+			content := incoming.Content
 			if len(content) > 1000 {
 				content = content[:1000]
 			}
@@ -104,13 +132,30 @@ func HandleWebSocket() gin.HandlerFunc {
 				continue
 			}
 
+			// Status belirle: Karşı taraf odada mı? Odadaysa read, yoksa delivered/sent
+			msgStatus := "sent"
+			chatMu.RLock()
+			roomUsers := chatRooms[roomID]
+			chatMu.RUnlock()
+
+			// Odada iki kişi varsa okunmuştur
+			if len(roomUsers) > 1 {
+				msgStatus = "read"
+			} else {
+				// Karşı tarafı odadan çıkarıp, online mı diye Redis'e de bakabiliriz, ama şimdilik "sent" yapalım
+				// (Veya "delivered" yapabilirdik redis online check ile)
+				msgStatus = "sent"
+			}
+
 			chatMsg := ChatMessage{
+				ID:        primitive.NewObjectID(),
 				Type:      "message",
 				UserID:    userId,
 				Username:  username,
 				Content:   content,
 				Timestamp: time.Now().Unix(),
 				RoomID:    roomID,
+				Status:    msgStatus,
 			}
 
 			broadcastToRoom(roomID, chatMsg)
@@ -201,6 +246,30 @@ func saveChatMessage(msg ChatMessage) {
 		_, err := collection.InsertOne(ctx, msg)
 		if err != nil {
 			log.Println("Mesaj kaydedilemedi:", err)
+		}
+	}()
+}
+
+// markMessagesAsRead — Bir odadaki tüm okunmamış mesajları 'read' statüsüne çeker
+func markMessagesAsRead(roomID string, userId string) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		collection := config.GetCollection(config.DB, "messages")
+		// Benim dışımda gönderilen (userId'si farklı olan) ve odaya ait mesajların statusünü read yap
+		filter := bson.M{
+			"roomId": roomID,
+			"userId": bson.M{"$ne": userId},
+			"status": bson.M{"$in": []string{"sent", "delivered"}},
+		}
+		update := bson.M{
+			"$set": bson.M{"status": "read"},
+		}
+
+		_, err := collection.UpdateMany(ctx, filter, update)
+		if err != nil {
+			log.Println("Mesajlar read olarak işaretlenemedi:", err)
 		}
 	}()
 }

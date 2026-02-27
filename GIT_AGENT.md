@@ -145,6 +145,9 @@ If such a command is required, the agent must:
 - Prefer full sentences or meaningful phrases.
 - Avoid vague words like "güncellendi", "düzenlendi" without context.
 
+### Manual Execution Policy
+- Whenever you prepare a PR, commits, or any Git-related task, you MUST always provide a clear, step-by-step list of the exact terminal commands for the user to execute manually in their shell.
+
 ### Small changes rule
 - Very small changes (e.g., adding a single keyword to a list, fixing a typo)
   should NOT have a separate commit.
@@ -169,3 +172,8 @@ If such a command is required, the agent must:
 
 Example:
 - feat(search): search-algorithm.ts içinde route filtreleme district-only hale getirildi
+
+## Manual Command Delivery
+- After preparing commit messages, branch names, and PR descriptions, you MUST always provide the exact step-by-step Git commands (e.g., git checkout, git add, git commit, git push) required to complete the task.
+- These commands must be in a clear, executable code block format so the user can easily copy and run them manually.
+- Even when providing a "merge to main" or "push to remote" plan, the output must always conclude with the specific command sequence.

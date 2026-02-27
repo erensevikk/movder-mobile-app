@@ -17,5 +17,10 @@ func UserRoutes(r *gin.Engine) {
 	protected.Use(middleware.AuthMiddleware())
 	{
 		protected.GET("/profile", controllers.GetProfile())
+		protected.POST("/profile", controllers.UpdateProfile())
+		protected.GET("/users/search", controllers.SearchUsers())
+		protected.GET("/users/:targetId", controllers.GetUserProfile())
+		protected.POST("/users/block/:targetId", controllers.BlockUser())
+		protected.POST("/users/unmatch/:targetId", controllers.UnmatchUser())
 	}
 }

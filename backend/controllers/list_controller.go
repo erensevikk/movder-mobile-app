@@ -1,25 +1,106 @@
 package controllers
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
+	"encoding/csv"
+	"errors"
+	"fmt"
+	"io"
 	"movder-backend/config"
 	"movder-backend/models"
+	"movder-backend/services"
 	"net/http"
+	"net/url"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
 	"time"
+	"unicode"
 
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-// CreateList — Yeni bir liste (Kategori) oluşturur
+const (
+	maxImportUploadBytes = 10 << 20 // 10MB
+	maxZipEntries        = 50
+	maxZipCSVFiles       = 20
+	maxZipUnpackedBytes  = 40 << 20 // 40MB
+	maxCSVRows           = 5000
+	previewTTL           = 30 * time.Minute
+	parseTimeout         = 12 * time.Second
+	importRequestTimeout = 45 * time.Second
+)
+
+type parsedListItem struct {
+	Position    int
+	Name        string
+	Year        int
+	URL         string
+	Description string
+	TmdbID      int
+	MovieName   string
+	PosterURL   string
+	Confidence  string
+	Reason      string
+}
+
+type parsedList struct {
+	Name        string
+	Description string
+	CreatedAt   time.Time
+	Items       []parsedListItem
+}
+
+type importPreviewData struct {
+	UserID    string
+	Lists     []parsedList
+	CreatedAt time.Time
+}
+
+type importCommitInput struct {
+	PreviewToken string `json:"previewToken" binding:"required"`
+	Strategy     string `json:"strategy"`
+}
+
+type previewUnresolvedItem struct {
+	ListName string `json:"listName"`
+	Position int    `json:"position"`
+	Name     string `json:"name"`
+	Year     int    `json:"year"`
+	URL      string `json:"url"`
+	Reason   string `json:"reason"`
+}
+
+type previewConflictCandidate struct {
+	ListName          string `json:"listName"`
+	ExistingListID    string `json:"existingListId"`
+	ExistingItemCount int64  `json:"existingItemCount"`
+	IncomingItemCount int    `json:"incomingItemCount"`
+}
+
+var searchMoviesFn = services.SearchMovies
+
+var (
+	importPreviewStore   = map[string]importPreviewData{}
+	importPreviewStoreMu sync.Mutex
+)
+
+// CreateList â€” Yeni bir liste (Kategori) oluÅŸturur
 func CreateList() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userId := c.GetString("userId")
 		var input models.CreateListInput
 
 		if err := c.ShouldBindJSON(&input); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Hatalı girdi: " + err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "HatalÄ± girdi: " + err.Error()})
 			return
 		}
 
@@ -39,15 +120,15 @@ func CreateList() gin.HandlerFunc {
 		result, err := collection.InsertOne(ctx, newList)
 
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Liste oluşturulamadı"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Liste oluÅŸturulamadÄ±"})
 			return
 		}
 
-		c.JSON(http.StatusCreated, gin.H{"message": "Liste başarıyla oluşturuldu", "listId": result.InsertedID})
+		c.JSON(http.StatusCreated, gin.H{"message": "Liste baÅŸarÄ±yla oluÅŸturuldu", "listId": result.InsertedID})
 	}
 }
 
-// GetMyLists — Kullanıcının oluşturduğu tüm listeleri (kategorileri) getirir
+// GetMyLists â€” KullanÄ±cÄ±nÄ±n oluÅŸturduÄŸu tÃ¼m listeleri (kategorileri) getirir
 func GetMyLists() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userId := c.GetString("userId")
@@ -65,7 +146,7 @@ func GetMyLists() gin.HandlerFunc {
 
 		var lists []models.List
 		if err = cursor.All(ctx, &lists); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Listeler okunamadı"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Listeler okunamadÄ±"})
 			return
 		}
 
@@ -73,36 +154,34 @@ func GetMyLists() gin.HandlerFunc {
 	}
 }
 
-// AddMovieToList — Belirli bir listeye film ekler
+// AddMovieToList â€” Belirli bir listeye film ekler
 func AddMovieToList() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userId := c.GetString("userId")
 		var input models.AddToListInput
 
 		if err := c.ShouldBindJSON(&input); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Hatalı girdi: " + err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "HatalÄ± girdi: " + err.Error()})
 			return
 		}
 
 		listObjId, err := primitive.ObjectIDFromHex(input.ListID)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz Liste ID'si"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "GeÃ§ersiz Liste ID'si"})
 			return
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		// 1. Listenin bu kullanıcıya ait olup olmadığını kontrol et
 		listColl := config.GetCollection(config.DB, "lists")
 		var list models.List
 		err = listColl.FindOne(ctx, bson.M{"_id": listObjId, "userId": userId}).Decode(&list)
 		if err != nil {
-			c.JSON(http.StatusForbidden, gin.H{"error": "Bu liste bulunamadı veya size ait değil"})
+			c.JSON(http.StatusForbidden, gin.H{"error": "Bu liste bulunamadÄ± veya size ait deÄŸil"})
 			return
 		}
 
-		// 2. Film zaten bu listede var mı kontrol et
 		itemColl := config.GetCollection(config.DB, "list_items")
 		count, _ := itemColl.CountDocuments(ctx, bson.M{"listId": listObjId, "tmdbId": input.TmdbID})
 		if count > 0 {
@@ -110,9 +189,9 @@ func AddMovieToList() gin.HandlerFunc {
 			return
 		}
 
-		// 3. Filmi ekle
 		newItem := models.ListItem{
 			ListID:    listObjId,
+			Position:  input.Position,
 			TmdbID:    input.TmdbID,
 			MovieName: input.MovieName,
 			PosterURL: input.PosterURL,
@@ -125,21 +204,18 @@ func AddMovieToList() gin.HandlerFunc {
 			return
 		}
 
-		// Listenin Update tarihini güncelle
-		listColl.UpdateOne(ctx, bson.M{"_id": listObjId}, bson.M{"$set": bson.M{"updatedAt": time.Now()}})
-
-		c.JSON(http.StatusOK, gin.H{"message": "Film başarıyla eklendi!"})
+		_, _ = listColl.UpdateOne(ctx, bson.M{"_id": listObjId}, bson.M{"$set": bson.M{"updatedAt": time.Now()}})
+		c.JSON(http.StatusOK, gin.H{"message": "Film baÅŸarÄ±yla eklendi!"})
 	}
 }
 
-// GetListItems — Bir listenin içindeki tüm filmleri getirir
+// GetListItems â€” Bir listenin iÃ§indeki tÃ¼m filmleri getirir
 func GetListItems() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		listIdStr := c.Param("id")
-
 		listObjId, err := primitive.ObjectIDFromHex(listIdStr)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz Liste ID'si"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "GeÃ§ersiz Liste ID'si"})
 			return
 		}
 
@@ -147,7 +223,8 @@ func GetListItems() gin.HandlerFunc {
 		defer cancel()
 
 		itemColl := config.GetCollection(config.DB, "list_items")
-		cursor, err := itemColl.Find(ctx, bson.M{"listId": listObjId})
+		findOpts := options.Find().SetSort(bson.D{{Key: "position", Value: 1}, {Key: "addedAt", Value: 1}})
+		cursor, err := itemColl.Find(ctx, bson.M{"listId": listObjId}, findOpts)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Filmler getirilemedi"})
 			return
@@ -156,10 +233,812 @@ func GetListItems() gin.HandlerFunc {
 
 		var items []models.ListItem
 		if err = cursor.All(ctx, &items); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Filmler okunamadı"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Filmler okunamadÄ±"})
 			return
 		}
 
 		c.JSON(http.StatusOK, items)
 	}
+}
+
+// PreviewLetterboxdImport â€” ZIP/CSV import Ã¶nizlemesi Ã¼retir, DB yazmaz
+func PreviewLetterboxdImport() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !isLetterboxdImportEnabled() {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error":     "Letterboxd import ozelligi su anda kapali",
+				"errorCode": "IMPORT_DISABLED",
+			})
+			return
+		}
+
+		userID := c.GetString("userId")
+		fileHeader, err := c.FormFile("file")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Yuklenecek dosya bulunamadi", "errorCode": "FILE_REQUIRED"})
+			return
+		}
+
+		f, err := fileHeader.Open()
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Dosya acilamadi", "errorCode": "FILE_OPEN_FAILED"})
+			return
+		}
+		defer f.Close()
+
+		payload, err := io.ReadAll(io.LimitReader(f, maxImportUploadBytes+1))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Dosya okunamadi", "errorCode": "FILE_READ_FAILED"})
+			return
+		}
+		if len(payload) > maxImportUploadBytes {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "Dosya cok buyuk (max 10MB)", "errorCode": "UPLOAD_TOO_LARGE"})
+			return
+		}
+
+		type parseResult struct {
+			lists    []parsedList
+			warnings []string
+			err      error
+		}
+		parseCh := make(chan parseResult, 1)
+		go func() {
+			lists, warnings, err := parseLetterboxdPayload(payload, fileHeader.Filename)
+			parseCh <- parseResult{lists: lists, warnings: warnings, err: err}
+		}()
+
+		var lists []parsedList
+		var warnings []string
+		select {
+		case res := <-parseCh:
+			lists, warnings, err = res.lists, res.warnings, res.err
+		case <-time.After(parseTimeout):
+			c.JSON(http.StatusRequestTimeout, gin.H{"error": "Dosya parse zaman asimina ugradi", "errorCode": "PARSE_TIMEOUT"})
+			return
+		}
+
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "errorCode": "PARSE_FAILED"})
+			return
+		}
+		if len(lists) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Dosyada import edilecek liste bulunamadi", "errorCode": "NO_LIST_FOUND"})
+			return
+		}
+
+		unresolvedTotal := 0
+		unresolvedItems := make([]previewUnresolvedItem, 0)
+		for li := range lists {
+			for ii := range lists[li].Items {
+				matchTMDBMovie(&lists[li].Items[ii])
+				if lists[li].Items[ii].TmdbID == 0 {
+					unresolvedTotal++
+					unresolvedItems = append(unresolvedItems, previewUnresolvedItem{
+						ListName: lists[li].Name,
+						Position: lists[li].Items[ii].Position,
+						Name:     lists[li].Items[ii].Name,
+						Year:     lists[li].Items[ii].Year,
+						URL:      lists[li].Items[ii].URL,
+						Reason:   lists[li].Items[ii].Reason,
+					})
+				}
+			}
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), importRequestTimeout)
+		defer cancel()
+		conflicts := detectConflictCandidates(ctx, userID, lists)
+
+		token := primitive.NewObjectID().Hex()
+		importPreviewStoreMu.Lock()
+		importPreviewStore[token] = importPreviewData{UserID: userID, Lists: lists, CreatedAt: time.Now()}
+		importPreviewStoreMu.Unlock()
+
+		responseLists := make([]gin.H, 0, len(lists))
+		for _, l := range lists {
+			resolved := 0
+			for _, it := range l.Items {
+				if it.TmdbID > 0 {
+					resolved++
+				}
+			}
+			responseLists = append(responseLists, gin.H{
+				"name":        l.Name,
+				"description": l.Description,
+				"createdAt":   l.CreatedAt,
+				"itemCount":   len(l.Items),
+				"resolved":    resolved,
+				"unresolved":  len(l.Items) - resolved,
+			})
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"previewToken": token,
+			"lists":        responseLists,
+			"warnings":     warnings,
+			"warningsSummary": gin.H{
+				"warningCount": len(warnings),
+			},
+			"unresolvedItems": unresolvedItems,
+			"conflicts":       conflicts,
+			"totals": gin.H{
+				"listCount":       len(lists),
+				"itemCount":       totalItems(lists),
+				"unresolvedCount": unresolvedTotal,
+				"conflictCount":   len(conflicts),
+			},
+		})
+	}
+}
+
+// CommitLetterboxdImport â€” Ã¶nizlenen importu DB'ye yazar
+func CommitLetterboxdImport() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !isLetterboxdImportEnabled() {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error":     "Letterboxd import ozelligi su anda kapali",
+				"errorCode": "IMPORT_DISABLED",
+			})
+			return
+		}
+
+		userID := c.GetString("userId")
+		var input importCommitInput
+		if err := c.ShouldBindJSON(&input); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Gecersiz istek govdesi", "errorCode": "INVALID_BODY"})
+			return
+		}
+
+		strategy := strings.ToLower(strings.TrimSpace(input.Strategy))
+		if strategy == "" {
+			strategy = "merge"
+		}
+		if strategy != "merge" && strategy != "overwrite" && strategy != "duplicate" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Gecersiz strategy: merge | overwrite | duplicate", "errorCode": "INVALID_STRATEGY"})
+			return
+		}
+
+		importPreviewStoreMu.Lock()
+		preview, ok := importPreviewStore[input.PreviewToken]
+		if ok {
+			delete(importPreviewStore, input.PreviewToken)
+		}
+		importPreviewStoreMu.Unlock()
+
+		if !ok {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Preview bulunamadi veya suresi doldu", "errorCode": "PREVIEW_NOT_FOUND"})
+			return
+		}
+		if preview.UserID != userID {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Bu preview size ait degil", "errorCode": "PREVIEW_FORBIDDEN"})
+			return
+		}
+		if time.Since(preview.CreatedAt) > previewTTL {
+			c.JSON(http.StatusGone, gin.H{"error": "Preview suresi doldu", "errorCode": "PREVIEW_EXPIRED"})
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), importRequestTimeout)
+		defer cancel()
+
+		listColl := config.GetCollection(config.DB, "lists")
+		itemColl := config.GetCollection(config.DB, "list_items")
+
+		createdLists := 0
+		updatedLists := 0
+		addedItems := 0
+		skippedDuplicates := 0
+		skippedUnresolved := 0
+
+		skippedUnresolvedDetails := make([]gin.H, 0)
+		skippedDuplicateDetails := make([]gin.H, 0)
+
+		for _, incoming := range preview.Lists {
+			listID, existed, err := resolveTargetList(ctx, listColl, itemColl, userID, incoming, strategy)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Liste yazilirken hata olustu", "errorCode": "LIST_WRITE_FAILED"})
+				return
+			}
+			if existed {
+				updatedLists++
+			} else {
+				createdLists++
+			}
+
+			for _, item := range incoming.Items {
+				if item.TmdbID == 0 {
+					skippedUnresolved++
+					skippedUnresolvedDetails = append(skippedUnresolvedDetails, gin.H{
+						"listName": incoming.Name,
+						"position": item.Position,
+						"name":     item.Name,
+						"year":     item.Year,
+						"url":      item.URL,
+						"reason":   item.Reason,
+					})
+					continue
+				}
+
+				if strategy != "overwrite" {
+					cnt, _ := itemColl.CountDocuments(ctx, bson.M{"listId": listID, "tmdbId": item.TmdbID})
+					if cnt > 0 {
+						skippedDuplicates++
+						skippedDuplicateDetails = append(skippedDuplicateDetails, gin.H{
+							"listName":  incoming.Name,
+							"position":  item.Position,
+							"tmdbId":    item.TmdbID,
+							"movieName": item.MovieName,
+						})
+						continue
+					}
+				}
+
+				_, err = itemColl.InsertOne(ctx, models.ListItem{
+					ListID:    listID,
+					Position:  item.Position,
+					TmdbID:    item.TmdbID,
+					MovieName: item.MovieName,
+					PosterURL: item.PosterURL,
+					AddedAt:   time.Now(),
+				})
+				if err == nil {
+					addedItems++
+				}
+			}
+
+			_, _ = listColl.UpdateOne(ctx, bson.M{"_id": listID}, bson.M{"$set": bson.M{"updatedAt": time.Now()}})
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"message": "Letterboxd import tamamlandi",
+			"summary": gin.H{
+				"createdLists":      createdLists,
+				"updatedLists":      updatedLists,
+				"addedItems":        addedItems,
+				"skippedDuplicates": skippedDuplicates,
+				"skippedUnresolved": skippedUnresolved,
+			},
+			"skipped": gin.H{
+				"unresolved": skippedUnresolvedDetails,
+				"duplicates": skippedDuplicateDetails,
+			},
+		})
+	}
+}
+func resolveTargetList(
+	ctx context.Context,
+	listColl *mongo.Collection,
+	itemColl *mongo.Collection,
+	userID string,
+	incoming parsedList,
+	strategy string,
+) (primitive.ObjectID, bool, error) {
+	var existing models.List
+	err := listColl.FindOne(ctx, bson.M{"userId": userID, "name": incoming.Name}).Decode(&existing)
+	if err != nil && err != mongo.ErrNoDocuments {
+		return primitive.NilObjectID, false, err
+	}
+
+	now := time.Now()
+	if err == mongo.ErrNoDocuments {
+		res, insertErr := listColl.InsertOne(ctx, models.List{
+			UserID:      userID,
+			Name:        incoming.Name,
+			Description: incoming.Description,
+			IsPublic:    true,
+			CreatedAt:   incoming.CreatedAt,
+			UpdatedAt:   now,
+		})
+		if insertErr != nil {
+			return primitive.NilObjectID, false, insertErr
+		}
+		id, ok := res.InsertedID.(primitive.ObjectID)
+		if !ok {
+			return primitive.NilObjectID, false, errors.New("liste ID oluÅŸturulamadÄ±")
+		}
+		return id, false, nil
+	}
+
+	if strategy == "duplicate" {
+		dupName := incoming.Name
+		i := 2
+		for {
+			candidate := fmt.Sprintf("%s (%d)", incoming.Name, i)
+			cnt, countErr := listColl.CountDocuments(ctx, bson.M{"userId": userID, "name": candidate})
+			if countErr != nil {
+				return primitive.NilObjectID, false, countErr
+			}
+			if cnt == 0 {
+				dupName = candidate
+				break
+			}
+			i++
+		}
+		res, insertErr := listColl.InsertOne(ctx, models.List{
+			UserID:      userID,
+			Name:        dupName,
+			Description: incoming.Description,
+			IsPublic:    existing.IsPublic,
+			CreatedAt:   incoming.CreatedAt,
+			UpdatedAt:   now,
+		})
+		if insertErr != nil {
+			return primitive.NilObjectID, false, insertErr
+		}
+		id, ok := res.InsertedID.(primitive.ObjectID)
+		if !ok {
+			return primitive.NilObjectID, false, errors.New("kopya liste ID oluÅŸturulamadÄ±")
+		}
+		return id, false, nil
+	}
+
+	_, updErr := listColl.UpdateOne(ctx, bson.M{"_id": existing.ID}, bson.M{"$set": bson.M{
+		"description": incoming.Description,
+		"updatedAt":   now,
+	}})
+	if updErr != nil {
+		return primitive.NilObjectID, false, updErr
+	}
+
+	if strategy == "overwrite" {
+		_, _ = itemColl.DeleteMany(ctx, bson.M{"listId": existing.ID})
+	}
+
+	return existing.ID, true, nil
+}
+
+func totalItems(lists []parsedList) int {
+	t := 0
+	for _, l := range lists {
+		t += len(l.Items)
+	}
+	return t
+}
+
+func parseLetterboxdPayload(payload []byte, filename string) ([]parsedList, []string, error) {
+	if isZipPayload(payload, filename) {
+		return parseZipPayload(payload)
+	}
+	l, w, err := parseSingleCSVPayload(payload, filename)
+	if err != nil {
+		return nil, nil, err
+	}
+	return []parsedList{l}, w, nil
+}
+
+func isZipPayload(payload []byte, filename string) bool {
+	if len(payload) >= 4 && bytes.Equal(payload[:4], []byte{'P', 'K', 3, 4}) {
+		return true
+	}
+	return strings.EqualFold(filepath.Ext(filename), ".zip")
+}
+
+func parseZipPayload(payload []byte) ([]parsedList, []string, error) {
+	zr, err := zip.NewReader(bytes.NewReader(payload), int64(len(payload)))
+	if err != nil {
+		return nil, nil, errors.New("ZIP acilamadi")
+	}
+	if len(zr.File) > maxZipEntries {
+		return nil, nil, fmt.Errorf("ZIP icinde cok fazla dosya var (max %d)", maxZipEntries)
+	}
+
+	preferred := make([]*zip.File, 0)
+	fallback := make([]*zip.File, 0)
+	csvCount := 0
+	var unpackedTotal uint64
+
+	for _, f := range zr.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+
+		clean := filepath.ToSlash(filepath.Clean(f.Name))
+		if strings.Contains(clean, "../") || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") {
+			continue
+		}
+
+		unpackedTotal += f.UncompressedSize64
+		if unpackedTotal > maxZipUnpackedBytes {
+			return nil, nil, fmt.Errorf("ZIP acildiginda boyut limiti asiliyor (max %dMB)", maxZipUnpackedBytes>>20)
+		}
+
+		if !strings.HasSuffix(strings.ToLower(clean), ".csv") {
+			continue
+		}
+		csvCount++
+		if csvCount > maxZipCSVFiles {
+			return nil, nil, fmt.Errorf("ZIP icinde cok fazla CSV var (max %d)", maxZipCSVFiles)
+		}
+
+		if strings.HasPrefix(strings.ToLower(clean), "lists/") {
+			preferred = append(preferred, f)
+		} else {
+			fallback = append(fallback, f)
+		}
+	}
+
+	csvFiles := preferred
+	if len(csvFiles) == 0 {
+		csvFiles = fallback
+	}
+	if len(csvFiles) == 0 {
+		return nil, nil, errors.New("ZIP icinde CSV dosyasi bulunamadi")
+	}
+
+	lists := make([]parsedList, 0, len(csvFiles))
+	warnings := make([]string, 0)
+	for _, f := range csvFiles {
+		rc, err := f.Open()
+		if err != nil {
+			warnings = append(warnings, "CSV acilamadi: "+f.Name)
+			continue
+		}
+
+		content, err := io.ReadAll(io.LimitReader(rc, maxImportUploadBytes+1))
+		_ = rc.Close()
+		if err != nil {
+			warnings = append(warnings, "CSV okunamadi: "+f.Name)
+			continue
+		}
+		if len(content) > maxImportUploadBytes {
+			warnings = append(warnings, "CSV boyutu cok buyuk: "+f.Name)
+			continue
+		}
+
+		parsed, warn, err := parseSingleCSVPayload(content, f.Name)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("%s: %s", f.Name, err.Error()))
+			continue
+		}
+		warnings = append(warnings, warn...)
+		lists = append(lists, parsed)
+	}
+
+	return lists, warnings, nil
+}
+
+func parseSingleCSVPayload(payload []byte, filename string) (parsedList, []string, error) {
+	reader := csv.NewReader(bytes.NewReader(payload))
+	reader.FieldsPerRecord = -1
+	reader.LazyQuotes = true
+	reader.TrimLeadingSpace = true
+
+	records, err := reader.ReadAll()
+	if err != nil {
+		return parsedList{}, nil, errors.New("CSV parse edilemedi")
+	}
+	if len(records) == 0 {
+		return parsedList{}, nil, errors.New("CSV bos")
+	}
+	if len(records) > maxCSVRows {
+		return parsedList{}, nil, fmt.Errorf("CSV satir limiti asildi (max %d)", maxCSVRows)
+	}
+
+	metaHeaderIdx := findRowByFirstCell(records, "Date")
+	if metaHeaderIdx < 0 || metaHeaderIdx+1 >= len(records) {
+		return parsedList{}, nil, errors.New("Liste metadata satiri bulunamadi")
+	}
+	meta := mapHeaderToValues(records[metaHeaderIdx], records[metaHeaderIdx+1])
+
+	warnings := make([]string, 0)
+	for _, key := range []string{"Date", "Name", "Description"} {
+		if _, ok := meta[key]; !ok {
+			warnings = append(warnings, "Metadata kolonu eksik: "+key)
+		}
+	}
+
+	name := normalizeText(meta["Name"])
+	if name == "" {
+		name = strings.TrimSuffix(filepath.Base(filename), filepath.Ext(filename))
+	}
+
+	dateRaw := normalizeText(meta["Date"])
+	result := parsedList{
+		Name:        name,
+		Description: normalizeText(meta["Description"]),
+		CreatedAt:   parseLetterboxdDate(dateRaw),
+		Items:       []parsedListItem{},
+	}
+
+	itemHeaderIdx := findRowByFirstCell(records, "Position")
+	if itemHeaderIdx < 0 || itemHeaderIdx+1 >= len(records) {
+		warnings = append(warnings, "Film satirlari bulunamadi")
+		return result, warnings, nil
+	}
+
+	itemHeader := records[itemHeaderIdx]
+	for _, key := range []string{"Position", "Name", "Year", "URL"} {
+		if !headerContains(itemHeader, key) {
+			warnings = append(warnings, "Film kolonu eksik: "+key)
+		}
+	}
+
+	for i := itemHeaderIdx + 1; i < len(records); i++ {
+		row := records[i]
+		if isBlankRow(row) {
+			continue
+		}
+
+		vals := mapHeaderToValues(itemHeader, row)
+		movieName := normalizeText(vals["Name"])
+		if movieName == "" {
+			continue
+		}
+
+		position, _ := strconv.Atoi(normalizeText(vals["Position"]))
+		year, _ := strconv.Atoi(normalizeText(vals["Year"]))
+		result.Items = append(result.Items, parsedListItem{
+			Position:    position,
+			Name:        movieName,
+			Year:        year,
+			URL:         normalizeText(vals["URL"]),
+			Description: normalizeText(vals["Description"]),
+		})
+	}
+
+	return result, warnings, nil
+}
+
+func matchTMDBMovie(item *parsedListItem) {
+	if item == nil {
+		return
+	}
+
+	source, picked, score := findBestTMDBCandidate(item)
+	if picked == nil {
+		item.Confidence = "unresolved"
+		item.Reason = "TMDB sonucu bulunamadi"
+		return
+	}
+
+	item.Confidence = confidenceFromScore(score)
+	if item.Confidence == "unresolved" {
+		item.TmdbID = 0
+		item.MovieName = ""
+		item.PosterURL = ""
+		item.Reason = fmt.Sprintf("Dusuk eslesme skoru (%d)", score)
+		return
+	}
+
+	item.TmdbID = picked.ID
+	item.MovieName = picked.Title
+	item.Reason = ""
+	if strings.TrimSpace(picked.PosterPath) != "" {
+		item.PosterURL = "https://image.tmdb.org/t/p/w342" + picked.PosterPath
+	}
+
+	if source == "slug" && item.Confidence == "probable" && score >= 70 {
+		item.Confidence = "exact"
+	}
+}
+
+func findBestTMDBCandidate(item *parsedListItem) (string, *services.TMDBMovie, int) {
+	type querySpec struct {
+		source string
+		query  string
+		bonus  int
+	}
+
+	queries := make([]querySpec, 0, 2)
+	if slugQuery := queryFromSlug(item.URL); slugQuery != "" {
+		if item.Year > 0 {
+			slugQuery = fmt.Sprintf("%s %d", slugQuery, item.Year)
+		}
+		queries = append(queries, querySpec{source: "slug", query: slugQuery, bonus: 15})
+	}
+
+	nameQuery := item.Name
+	if item.Year > 0 {
+		nameQuery = fmt.Sprintf("%s %d", item.Name, item.Year)
+	}
+	queries = append(queries, querySpec{source: "title_year", query: nameQuery})
+
+	bestScore := -1
+	bestSource := ""
+	var bestMovie *services.TMDBMovie
+
+	for _, q := range queries {
+		res, err := searchMoviesFn(q.query)
+		if err != nil || res == nil || len(res.Results) == 0 {
+			continue
+		}
+
+		for i := range res.Results {
+			m := res.Results[i]
+			score := scoreTMDBCandidate(item, m, i) + q.bonus
+			if score > bestScore {
+				bestScore = score
+				bestSource = q.source
+				picked := m
+				bestMovie = &picked
+			}
+		}
+	}
+
+	return bestSource, bestMovie, bestScore
+}
+
+func scoreTMDBCandidate(item *parsedListItem, m services.TMDBMovie, idx int) int {
+	score := 0
+	titleA := strings.ToLower(strings.TrimSpace(item.Name))
+	titleB := strings.ToLower(strings.TrimSpace(m.Title))
+
+	switch {
+	case titleA != "" && titleA == titleB:
+		score += 60
+	case titleA != "" && (strings.Contains(titleB, titleA) || strings.Contains(titleA, titleB)):
+		score += 30
+	}
+
+	y := parseYearFromRelease(m.ReleaseDate)
+	if item.Year > 0 && y == item.Year {
+		score += 35
+	} else if item.Year > 0 && y != 0 {
+		diff := y - item.Year
+		if diff < 0 {
+			diff = -diff
+		}
+		if diff == 1 {
+			score += 10
+		}
+	}
+
+	if idx == 0 {
+		score += 5
+	}
+
+	return score
+}
+
+func confidenceFromScore(score int) string {
+	if score >= 90 {
+		return "exact"
+	}
+	if score >= 50 {
+		return "probable"
+	}
+	return "unresolved"
+}
+
+func queryFromSlug(rawURL string) string {
+	slug := extractLetterboxdSlug(rawURL)
+	if slug == "" {
+		return ""
+	}
+	clean := strings.ReplaceAll(slug, "-", " ")
+	clean = strings.TrimSpace(clean)
+	if clean == "" {
+		return ""
+	}
+	return normalizeText(clean)
+}
+
+func extractLetterboxdSlug(rawURL string) string {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || u == nil {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	for i := 0; i < len(parts)-1; i++ {
+		if strings.EqualFold(parts[i], "film") {
+			return strings.TrimSpace(parts[i+1])
+		}
+	}
+	return ""
+}
+
+func parseYearFromRelease(releaseDate string) int {
+	if len(releaseDate) < 4 {
+		return 0
+	}
+	y, _ := strconv.Atoi(releaseDate[:4])
+	return y
+}
+
+func parseLetterboxdDate(raw string) time.Time {
+	raw = normalizeText(raw)
+	if raw == "" {
+		return time.Now()
+	}
+	layouts := []string{"2006-01-02", "02 Jan 2006", "2 Jan 2006", "Jan 2 2006", "2006/01/02", "02.01.2006"}
+	for _, layout := range layouts {
+		if t, err := time.Parse(layout, raw); err == nil {
+			return t
+		}
+	}
+	return time.Now()
+}
+
+func detectConflictCandidates(ctx context.Context, userID string, lists []parsedList) []previewConflictCandidate {
+	conflicts := make([]previewConflictCandidate, 0)
+	listColl := config.GetCollection(config.DB, "lists")
+	itemColl := config.GetCollection(config.DB, "list_items")
+
+	for _, incoming := range lists {
+		var existing models.List
+		err := listColl.FindOne(ctx, bson.M{"userId": userID, "name": incoming.Name}).Decode(&existing)
+		if err != nil {
+			continue
+		}
+
+		itemCount, _ := itemColl.CountDocuments(ctx, bson.M{"listId": existing.ID})
+		conflicts = append(conflicts, previewConflictCandidate{
+			ListName:          incoming.Name,
+			ExistingListID:    existing.ID.Hex(),
+			ExistingItemCount: itemCount,
+			IncomingItemCount: len(incoming.Items),
+		})
+	}
+
+	sort.Slice(conflicts, func(i, j int) bool {
+		return conflicts[i].ListName < conflicts[j].ListName
+	})
+
+	return conflicts
+}
+
+func isLetterboxdImportEnabled() bool {
+	raw := strings.TrimSpace(strings.ToLower(config.GetEnv("FEATURE_LETTERBOXD_IMPORT", "false")))
+	return raw == "1" || raw == "true" || raw == "yes" || raw == "on"
+}
+
+func normalizeText(s string) string {
+	s = strings.ToValidUTF8(s, "")
+	s = strings.TrimSpace(strings.ReplaceAll(s, "\uFEFF", ""))
+	s = strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' || r == '\r' {
+			return r
+		}
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
+	return strings.TrimSpace(s)
+}
+
+func findRowByFirstCell(records [][]string, firstCell string) int {
+	for i, row := range records {
+		if len(row) == 0 {
+			continue
+		}
+		if strings.EqualFold(normalizeText(row[0]), firstCell) {
+			return i
+		}
+	}
+	return -1
+}
+
+func mapHeaderToValues(header []string, row []string) map[string]string {
+	m := map[string]string{}
+	for i := 0; i < len(header); i++ {
+		k := normalizeText(header[i])
+		if k == "" {
+			continue
+		}
+		if i < len(row) {
+			m[k] = normalizeText(row[i])
+		} else {
+			m[k] = ""
+		}
+	}
+	return m
+}
+
+func headerContains(header []string, key string) bool {
+	for _, col := range header {
+		if strings.EqualFold(normalizeText(col), key) {
+			return true
+		}
+	}
+	return false
+}
+
+func isBlankRow(row []string) bool {
+	for _, v := range row {
+		if normalizeText(v) != "" {
+			return false
+		}
+	}
+	return true
 }

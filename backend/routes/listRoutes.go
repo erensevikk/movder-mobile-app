@@ -16,7 +16,9 @@ func ListRoutes(r *gin.Engine) {
 		lists.GET("/my", controllers.GetMyLists()) // Kendi listelerimi getir
 
 		// Liste İçi Öğe (Film) Yönetimi
-		lists.POST("/items", controllers.AddMovieToList())  // Bir listeye film ekle
-		lists.GET("/:id/items", controllers.GetListItems()) // Bir listenin filmlerini getir
+		lists.POST("/items", controllers.AddMovieToList())                   // Bir listeye film ekle
+		lists.GET("/:id/items", controllers.GetListItems())                  // Bir listenin filmlerini getir
+		lists.POST("/import/preview", controllers.PreviewLetterboxdImport()) // Letterboxd ZIP/CSV önizleme
+		lists.POST("/import/commit", controllers.CommitLetterboxdImport())   // Letterboxd import commit
 	}
 }

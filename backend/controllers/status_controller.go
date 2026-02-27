@@ -7,7 +7,9 @@ import (
 	"movder-backend/config"
 	"movder-backend/models"
 	"net/http"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -47,9 +49,9 @@ func SetWatchStatus() gin.HandlerFunc {
 		movieKey := fmt.Sprintf("movie:%d:watchers", input.TmdbID)
 
 		pipe := config.RedisClient.Pipeline()
-		pipe.Set(ctx, watchKey, statusJSON, 6*time.Hour) // 6 saat TTL
-		pipe.SAdd(ctx, movieKey, userId)                 // İzleyenler set'ine ekle
-		pipe.Expire(ctx, movieKey, 6*time.Hour)          // Set'e de TTL koy
+		pipe.Set(ctx, watchKey, statusJSON, 15*time.Minute) // 15 dakika TTL
+		pipe.SAdd(ctx, movieKey, userId)                    // İzleyenler set'ine ekle
+		pipe.Expire(ctx, movieKey, 15*time.Minute)          // Set'e de TTL koy
 		_, err := pipe.Exec(ctx)
 
 		if err != nil {
@@ -154,6 +156,85 @@ func GetMyStatus() gin.HandlerFunc {
 	}
 }
 
+type topActiveMovie struct {
+	TmdbID       int    `json:"tmdbId"`
+	MovieName    string `json:"movieName"`
+	PosterPath   string `json:"posterPath"`
+	WatcherCount int    `json:"watcherCount"`
+}
+
+// GetTopActiveMovies — Aktif izlenen filmleri izleyici sayısına göre sıralayıp döner
+func GetTopActiveMovies() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx := context.Background()
+
+		limit := 5
+		if limitStr := c.Query("limit"); limitStr != "" {
+			if parsed, err := strconv.Atoi(limitStr); err == nil && parsed > 0 && parsed <= 20 {
+				limit = parsed
+			}
+		}
+
+		keys, err := config.RedisClient.Keys(ctx, "watching:*").Result()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Aktif izlenen filmler alınamadı"})
+			return
+		}
+
+		if len(keys) == 0 {
+			c.JSON(http.StatusOK, gin.H{"movies": []topActiveMovie{}})
+			return
+		}
+
+		agg := make(map[int]*topActiveMovie)
+
+		for _, key := range keys {
+			data, err := config.RedisClient.Get(ctx, key).Result()
+			if err != nil {
+				continue
+			}
+
+			var status models.WatchStatus
+			if err := json.Unmarshal([]byte(data), &status); err != nil {
+				continue
+			}
+
+			posterPath := strings.TrimSpace(status.PosterPath)
+			if status.TmdbID <= 0 || strings.TrimSpace(status.MovieName) == "" || posterPath == "" {
+				continue
+			}
+
+			if _, ok := agg[status.TmdbID]; !ok {
+				agg[status.TmdbID] = &topActiveMovie{
+					TmdbID:       status.TmdbID,
+					MovieName:    status.MovieName,
+					PosterPath:   posterPath,
+					WatcherCount: 0,
+				}
+			}
+			agg[status.TmdbID].WatcherCount++
+		}
+
+		movies := make([]topActiveMovie, 0, len(agg))
+		for _, item := range agg {
+			movies = append(movies, *item)
+		}
+
+		sort.Slice(movies, func(i, j int) bool {
+			if movies[i].WatcherCount == movies[j].WatcherCount {
+				return movies[i].TmdbID < movies[j].TmdbID
+			}
+			return movies[i].WatcherCount > movies[j].WatcherCount
+		})
+
+		if len(movies) > limit {
+			movies = movies[:limit]
+		}
+
+		c.JSON(http.StatusOK, gin.H{"movies": movies})
+	}
+}
+
 // clearPreviousStatus — Önceki izleme durumunu Redis'ten temizler
 func clearPreviousStatus(ctx context.Context, userId string) {
 	watchKey := fmt.Sprintf("watching:%s", userId)
@@ -167,4 +248,33 @@ func clearPreviousStatus(ctx context.Context, userId string) {
 		}
 	}
 	config.RedisClient.Del(ctx, watchKey)
+}
+
+// HeartbeatStatus — Kullanıcının izleme süresini uzatır (ping)
+func HeartbeatStatus() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx := context.Background()
+		userId := c.GetString("userId")
+
+		watchKey := fmt.Sprintf("watching:%s", userId)
+
+		// Kullanıcı şu an izliyor mu kontrol et
+		data, err := config.RedisClient.Get(ctx, watchKey).Result()
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Aktif bir izleme durumu bulunamadı veya süresi doldu."})
+			return
+		}
+
+		// watchKey'in süresini 15 dakika daha uzat
+		config.RedisClient.Expire(ctx, watchKey, 15*time.Minute)
+
+		// Hangi filmi izliyorsa, o filmin watchers set'inin de süresini tazele
+		var status models.WatchStatus
+		if err := json.Unmarshal([]byte(data), &status); err == nil {
+			movieKey := fmt.Sprintf("movie:%d:watchers", status.TmdbID)
+			config.RedisClient.Expire(ctx, movieKey, 15*time.Minute)
+		}
+
+		c.JSON(http.StatusOK, gin.H{"message": "İzleme durumu yenilendi!"})
+	}
 }

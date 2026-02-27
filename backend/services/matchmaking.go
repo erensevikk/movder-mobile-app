@@ -9,6 +9,8 @@ import (
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // MatchRequest — Eşleşme kuyruğuna gönderilen mesaj
@@ -77,6 +79,7 @@ func PublishMatchRequest(req MatchRequest) error {
 // CheckForMatch — Redis'teki izleyici set'ini kontrol ederek eşleşme olup olmadığına bakar
 func CheckForMatch(userId string, tmdbID int) (*MatchResult, error) {
 	ctx := context.Background()
+	userCol := config.GetCollection(config.DB, "users")
 	movieKey := fmt.Sprintf("movie:%d:watchers", tmdbID)
 
 	// Bu filmi izleyen diğer kullanıcıları bul
@@ -88,7 +91,29 @@ func CheckForMatch(userId string, tmdbID int) (*MatchResult, error) {
 	// Kendisi hariç başka izleyen var mı?
 	for _, watcherID := range watchers {
 		if watcherID != userId {
-			// Eşleşme bulundu! Oda oluştur
+			// Eşleşme bulundu, ancak engellenmiş mi kontrol et
+			// 1. Kendi engellediğim kişiler arasında mı?
+			// 2. Karşı tarafın engellediği kişiler arasında mıyım?
+
+			// ID'leri primitive.ObjectID'ye çevir
+			importID, err1 := primitive.ObjectIDFromHex(userId)
+			targetID, err2 := primitive.ObjectIDFromHex(watcherID)
+
+			if err1 == nil && err2 == nil {
+				// MongoDB'de engellenme durumu varsa atla
+				blockedCount, _ := userCol.CountDocuments(ctx, bson.M{
+					"$or": bson.A{
+						bson.M{"_id": importID, "blocked_users": targetID},
+						bson.M{"_id": targetID, "blocked_users": importID},
+					},
+				})
+
+				if blockedCount > 0 {
+					continue // İki kullanıcıdan biri diğerini engellemişse bu eşleşmeyi atla
+				}
+			}
+
+			// Oda oluştur
 			watchKey := fmt.Sprintf("watching:%s", watcherID)
 			data, err := config.RedisClient.Get(ctx, watchKey).Result()
 			if err != nil {

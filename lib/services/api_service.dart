@@ -15,9 +15,11 @@ class ApiService {
     if (query.trim().isEmpty) return [];
 
     try {
-      final response = await http.get(
-        Uri.parse('$baseUrl/search?q=${Uri.encodeComponent(query.trim())}'),
-      );
+      final response = await http
+          .get(
+            Uri.parse('$baseUrl/search?q=${Uri.encodeComponent(query.trim())}'),
+          )
+          .timeout(const Duration(seconds: 4));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
@@ -114,6 +116,8 @@ class ApiService {
     String? description,
     Uint8List? imageBytes,
     String? imageFileName,
+    Uint8List? coverImageBytes,
+    String? coverImageFileName,
   }) async {
     final token = AuthService.token;
     if (token == null || token.isEmpty) return null;
@@ -134,6 +138,13 @@ class ApiService {
         request.files.add(
           http.MultipartFile.fromBytes('avatar', imageBytes,
               filename: imageFileName),
+        );
+      }
+
+      if (coverImageBytes != null && coverImageFileName != null) {
+        request.files.add(
+          http.MultipartFile.fromBytes('cover', coverImageBytes,
+              filename: coverImageFileName),
         );
       }
 
@@ -576,6 +587,151 @@ class ApiService {
       return {'error': 'Ekleme başarısız: ${response.statusCode}'};
     } catch (e) {
       return {'error': 'Sistem hatası: $e'};
+    }
+  }
+
+  /// Belirli bir listeden bir filmi siler
+  static Future<bool> removeMovieFromList(String listId, int tmdbId) async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return false;
+
+    try {
+      final response = await http.delete(
+        Uri.parse('$baseUrl/api/lists/$listId/items/$tmdbId'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Bir listeyi ve tüm içeriklerini siler
+  static Future<bool> deleteList(String listId) async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return false;
+
+    try {
+      final response = await http.delete(
+        Uri.parse('$baseUrl/api/lists/$listId'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Bir listenin film sıralamasını günceller
+  static Future<bool> reorderList(String listId, List<int> tmdbIds) async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return false;
+
+    try {
+      final response = await http.put(
+        Uri.parse('$baseUrl/api/lists/$listId/reorder'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({'tmdbIds': tmdbIds}),
+      );
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Bir listenin adını değiştirir
+  static Future<Map<String, dynamic>?> renameList(
+      String listId, String newName) async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return null;
+
+    try {
+      final response = await http.put(
+        Uri.parse('$baseUrl/api/lists/$listId/rename'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({'name': newName}),
+      );
+      return jsonDecode(response.body);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Aktif eşleşme arar
+  static Future<Map<String, dynamic>?> checkMatch(int tmdbId) async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return null;
+
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/api/match/check?tmdbId=$tmdbId'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      ).timeout(const Duration(seconds: 5));
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Aramayı iptal eder (kuyruktan çıkarır)
+  static Future<void> cancelMatch(int tmdbId) async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return;
+
+    try {
+      await http
+          .post(
+            Uri.parse('$baseUrl/api/match/cancel'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+            body: jsonEncode({'tmdbId': tmdbId}),
+          )
+          .timeout(const Duration(seconds: 3));
+    } catch (_) {}
+  }
+
+  /// Toplam kuyruk bekleyen kişi sayısını getirir
+  static Future<int> getQueueCount() async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return 0;
+
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/api/match/queue-count'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      ).timeout(const Duration(seconds: 3));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return data['queueCount'] ?? 0;
+      }
+      return 0;
+    } catch (_) {
+      return 0;
     }
   }
 

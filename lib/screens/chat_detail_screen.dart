@@ -1,3 +1,4 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import '../services/chat_service.dart';
@@ -7,6 +8,7 @@ class ChatDetailScreen extends StatefulWidget {
   final String avatarSeed;
   final bool isOnline;
   final String movieTitle;
+  final String? moviePoster; // Film posteri URL'si (arka plan için)
   final List<Map<String, dynamic>> initialMessages;
   final String? targetUserId; // Backend id (null ise buton devre dışı)
   final String? roomId;
@@ -17,6 +19,7 @@ class ChatDetailScreen extends StatefulWidget {
     required this.avatarSeed,
     required this.isOnline,
     required this.movieTitle,
+    this.moviePoster,
     this.initialMessages = const [],
     this.targetUserId,
     this.roomId,
@@ -277,30 +280,69 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final bool hasMessages = _messages.isNotEmpty;
+    // Poster URL'sini yüksek kaliteye çekiyoruz (w780 gibi)
+    String? poster = widget.moviePoster;
+    if (poster != null && poster.contains('/w92/')) {
+      poster = poster.replaceFirst('/w92/', '/w780/');
+    }
 
     return Scaffold(
       backgroundColor: const Color(0xFF0F0F0F),
-      body: SafeArea(
-        child: Column(
-          children: [
-            // ── Üst AppBar ─────────────────────────────────
-            _buildAppBar(),
-
-            // ── Film Eşleşme Bandı ─────────────────────────
-            _buildMovieBanner(),
-
-            // ── Sohbet Alanı ───────────────────────────────
-            Expanded(
-              child: hasMessages ? _buildMessageList() : _buildEmptyState(),
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          // ── Film Posteri Arka Plan ──────────────────────
+          if (poster != null && poster.isNotEmpty)
+            Positioned.fill(
+              child: Image.network(
+                poster,
+                fit: BoxFit.cover,
+                filterQuality: FilterQuality.high,
+                errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+              ),
             ),
 
-            // ── Hızlı Mesajlar (sadece boş sohbette) ──────
-            if (!hasMessages) _buildQuickMessages(),
+          // ── Koyu Overlay (poster gözü almasın) ─────────
+          if (poster != null && poster.isNotEmpty)
+            Positioned.fill(
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      const Color(0xFF0F0F0F).withOpacity(0.85),
+                      const Color(0xFF0F0F0F).withOpacity(0.90),
+                    ],
+                  ),
+                ),
+              ),
+            ),
 
-            // ── Mesaj Giriş Alanı ──────────────────────────
-            _buildMessageInput(),
-          ],
-        ),
+          // ── İçerik ─────────────────────────────────────
+          SafeArea(
+            child: Column(
+              children: [
+                // ── Üst AppBar ─────────────────────────────────
+                _buildAppBar(),
+
+                // ── Film Eşleşme Bandı ─────────────────────────
+                _buildMovieBanner(),
+
+                // ── Sohbet Alanı ───────────────────────────────
+                Expanded(
+                  child: hasMessages ? _buildMessageList() : _buildEmptyState(),
+                ),
+
+                // ── Hızlı Mesajlar (sadece boş sohbette) ──────
+                if (!hasMessages) _buildQuickMessages(),
+
+                // ── Mesaj Giriş Alanı ──────────────────────────
+                _buildMessageInput(),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -497,6 +539,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
             PopupMenuButton<String>(
               icon: const Icon(Icons.more_vert, color: Colors.white70),
               color: const Color(0xFF1E1E1E),
+              offset: const Offset(0, 55),
               onSelected: (value) {
                 if (value == 'unmatch') {
                   _showUnmatchDialog();
@@ -507,13 +550,19 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
               itemBuilder: (context) => [
                 const PopupMenuItem(
                   value: 'unmatch',
-                  child: Text('Eşleşmeyi iptal et',
-                      style: TextStyle(color: Colors.white)),
+                  height: 38,
+                  child: Text(
+                    'Eşleşmeyi iptal et',
+                    style: TextStyle(color: Colors.white, fontSize: 13),
+                  ),
                 ),
                 const PopupMenuItem(
                   value: 'block',
-                  child: Text('Engelle',
-                      style: TextStyle(color: Colors.redAccent)),
+                  height: 38,
+                  child: Text(
+                    'Engelle',
+                    style: TextStyle(color: Colors.redAccent, fontSize: 13),
+                  ),
                 ),
               ],
             ),
@@ -565,7 +614,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         title: const Text('Kullanıcıyı Engelle',
             style: TextStyle(color: Colors.white)),
         content: const Text(
-            'Bu kişiyi engellemek istediğinize emin misiniz? Bir daha sizinle eşleşemeyecek.',
+            'Bu kişiyi engellemek istediğinize emin misiniz? Bir daha eşleşmeyeceksiniz.',
             style: TextStyle(color: Colors.white70)),
         actions: [
           TextButton(

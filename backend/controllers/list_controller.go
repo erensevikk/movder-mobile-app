@@ -8,12 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"movder-backend/config"
 	"movder-backend/models"
 	"movder-backend/services"
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -104,8 +106,28 @@ func CreateList() gin.HandlerFunc {
 			return
 		}
 
+		input.Name = strings.TrimSpace(input.Name)
+		nameRegex := regexp.MustCompile(`^[a-zA-ZğüşıöçĞÜŞİÖÇ\s]+$`)
+		if !nameRegex.MatchString(input.Name) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Koleksiyon adı sadece harflerden oluşabilir."})
+			return
+		}
+
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
+
+		collection := config.GetCollection(config.DB, "lists")
+
+		var existing models.List
+		// Case-insensitive check for duplicate name
+		err := collection.FindOne(ctx, bson.M{
+			"userId": userId,
+			"name":   bson.M{"$regex": primitive.Regex{Pattern: "^" + regexp.QuoteMeta(input.Name) + "$", Options: "i"}},
+		}).Decode(&existing)
+		if err == nil {
+			c.JSON(http.StatusConflict, gin.H{"error": "Bu isimde bir koleksiyonunuz zaten mevcut."})
+			return
+		}
 
 		newList := models.List{
 			UserID:      userId,
@@ -116,7 +138,6 @@ func CreateList() gin.HandlerFunc {
 			UpdatedAt:   time.Now(),
 		}
 
-		collection := config.GetCollection(config.DB, "lists")
 		result, err := collection.InsertOne(ctx, newList)
 
 		if err != nil {
@@ -147,6 +168,32 @@ func GetMyLists() gin.HandlerFunc {
 		var lists []models.List
 		if err = cursor.All(ctx, &lists); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Listeler okunamadÄ±"})
+			return
+		}
+
+		c.JSON(http.StatusOK, lists)
+	}
+}
+
+// GetUserLists — Belirli bir kullanıcının herkese açık listelerini (kategorilerini) getirir
+func GetUserLists() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		targetUserId := c.Param("userId")
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		collection := config.GetCollection(config.DB, "lists")
+		cursor, err := collection.Find(ctx, bson.M{"userId": targetUserId, "isPublic": true})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Kullanıcının listeleri getirilemedi"})
+			return
+		}
+		defer cursor.Close(ctx)
+
+		var lists []models.List
+		if err = cursor.All(ctx, &lists); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Kullanıcının listeleri okunamadı"})
 			return
 		}
 
@@ -212,7 +259,7 @@ func AddMovieToList() gin.HandlerFunc {
 // GetListItems â€” Bir listenin iÃ§indeki tÃ¼m filmleri getirir
 func GetListItems() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		listIdStr := c.Param("id")
+		listIdStr := c.Param("listId")
 		listObjId, err := primitive.ObjectIDFromHex(listIdStr)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "GeÃ§ersiz Liste ID'si"})
@@ -241,7 +288,200 @@ func GetListItems() gin.HandlerFunc {
 	}
 }
 
-// PreviewLetterboxdImport â€” ZIP/CSV import Ã¶nizlemesi Ã¼retir, DB yazmaz
+// RemoveMovieFromList — Belirli bir listeden film siler
+func RemoveMovieFromList() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userId := c.GetString("userId")
+		listIdStr := c.Param("listId")
+		tmdbIdStr := c.Param("tmdbId")
+
+		listObjId, err := primitive.ObjectIDFromHex(listIdStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz Liste ID'si"})
+			return
+		}
+
+		tmdbId, err := strconv.Atoi(tmdbIdStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz Film ID'si"})
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		listColl := config.GetCollection(config.DB, "lists")
+		var list models.List
+		err = listColl.FindOne(ctx, bson.M{"_id": listObjId, "userId": userId}).Decode(&list)
+		if err != nil {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Bu liste bulunamadı veya size ait değil"})
+			return
+		}
+
+		itemColl := config.GetCollection(config.DB, "list_items")
+
+		res, err := itemColl.DeleteOne(ctx, bson.M{"listId": listObjId, "tmdbId": tmdbId})
+		if err != nil || res.DeletedCount == 0 {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Film bu listede bulunamadı"})
+			return
+		}
+
+		_, _ = listColl.UpdateOne(ctx, bson.M{"_id": listObjId}, bson.M{"$set": bson.M{"updatedAt": time.Now()}})
+		c.JSON(http.StatusOK, gin.H{"message": "Film başarıyla silindi!"})
+	}
+}
+
+// DeleteList — Bir listeyi ve içindeki tüm filmleri siler
+func DeleteList() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userId := c.GetString("userId")
+		listIdStr := c.Param("listId")
+
+		listObjId, err := primitive.ObjectIDFromHex(listIdStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz Liste ID'si"})
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		listColl := config.GetCollection(config.DB, "lists")
+
+		// Listenin sahibi bu kullanıcı mı kontrol et
+		var list models.List
+		err = listColl.FindOne(ctx, bson.M{"_id": listObjId, "userId": userId}).Decode(&list)
+		if err != nil {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Bu liste bulunamadı veya size ait değil"})
+			return
+		}
+
+		// Önce listedeki tüm öğeleri sil
+		itemColl := config.GetCollection(config.DB, "list_items")
+		_, _ = itemColl.DeleteMany(ctx, bson.M{"listId": listObjId})
+
+		// Sonra listeyi sil
+		_, err = listColl.DeleteOne(ctx, bson.M{"_id": listObjId})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Liste silinemedi"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"message": "Liste başarıyla silindi!"})
+	}
+}
+
+// RenameList — Bir listenin adını değiştirir
+func RenameList() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userId := c.GetString("userId")
+		listIdStr := c.Param("listId")
+
+		listObjId, err := primitive.ObjectIDFromHex(listIdStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz Liste ID'si"})
+			return
+		}
+
+		var input struct {
+			Name string `json:"name" binding:"required"`
+		}
+		if err := c.ShouldBindJSON(&input); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Yeni isim gerekli"})
+			return
+		}
+
+		input.Name = strings.TrimSpace(input.Name)
+		if input.Name == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Liste adı boş olamaz"})
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		listColl := config.GetCollection(config.DB, "lists")
+
+		// Listenin sahibi bu kullanıcı mı kontrol et
+		var list models.List
+		err = listColl.FindOne(ctx, bson.M{"_id": listObjId, "userId": userId}).Decode(&list)
+		if err != nil {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Bu liste bulunamadı veya size ait değil"})
+			return
+		}
+
+		// Aynı isimde başka liste var mı kontrol et
+		nameRegex := primitive.Regex{Pattern: "^" + regexp.QuoteMeta(input.Name) + "$", Options: "i"}
+		var existing models.List
+		err = listColl.FindOne(ctx, bson.M{
+			"userId": userId,
+			"name":   bson.M{"$regex": nameRegex},
+			"_id":    bson.M{"$ne": listObjId},
+		}).Decode(&existing)
+		if err == nil {
+			c.JSON(http.StatusConflict, gin.H{"error": "Bu isimde bir listeniz zaten var"})
+			return
+		}
+
+		_, err = listColl.UpdateOne(ctx, bson.M{"_id": listObjId}, bson.M{
+			"$set": bson.M{"name": input.Name, "updatedAt": time.Now()},
+		})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Liste adı güncellenemedi"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"message": "Liste adı güncellendi!", "name": input.Name})
+	}
+}
+
+// ReorderList — Listedeki filmlerin sırasını günceller
+// Body: { "tmdbIds": [38, 19404, 694, ...] } — yeni sıradaki tmdbId dizisi
+func ReorderList() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userId := c.GetString("userId")
+		listIdStr := c.Param("listId")
+
+		listObjId, err := primitive.ObjectIDFromHex(listIdStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz Liste ID'si"})
+			return
+		}
+
+		var input struct {
+			TmdbIds []int `json:"tmdbIds" binding:"required"`
+		}
+		if err := c.ShouldBindJSON(&input); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "tmdbIds dizisi gerekli"})
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		listColl := config.GetCollection(config.DB, "lists")
+
+		// Listenin sahibi kontrol et
+		var list models.List
+		if err = listColl.FindOne(ctx, bson.M{"_id": listObjId, "userId": userId}).Decode(&list); err != nil {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Bu liste bulunamadı veya size ait değil"})
+			return
+		}
+
+		itemColl := config.GetCollection(config.DB, "list_items")
+
+		// Her tmdbId'nin position'ını yeni index olarak güncelle
+		for i, tmdbId := range input.TmdbIds {
+			_, _ = itemColl.UpdateOne(ctx,
+				bson.M{"listId": listObjId, "tmdbId": tmdbId},
+				bson.M{"$set": bson.M{"position": i + 1}},
+			)
+		}
+
+		c.JSON(http.StatusOK, gin.H{"message": "Sıralama güncellendi"})
+	}
+}
+
+// PreviewLetterboxdImport — ZIP/CSV import Ã¶nizlemesi Ã¼retir, DB yazmaz
 func PreviewLetterboxdImport() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !isLetterboxdImportEnabled() {
@@ -489,6 +729,11 @@ func CommitLetterboxdImport() gin.HandlerFunc {
 			_, _ = listColl.UpdateOne(ctx, bson.M{"_id": listID}, bson.M{"$set": bson.M{"updatedAt": time.Now()}})
 		}
 
+		// Import başarılı — kullanıcıyı işaretleyelim
+		userIDObj, _ := primitive.ObjectIDFromHex(userID)
+		userColl := config.GetCollection(config.DB, "users")
+		_, _ = userColl.UpdateOne(ctx, bson.M{"_id": userIDObj}, bson.M{"$set": bson.M{"letterboxd_imported": true}})
+
 		c.JSON(http.StatusOK, gin.H{
 			"message": "Letterboxd import tamamlandi",
 			"summary": gin.H{
@@ -665,11 +910,21 @@ func parseZipPayload(payload []byte) ([]parsedList, []string, error) {
 		return nil, nil, errors.New("ZIP icinde CSV dosyasi bulunamadi")
 	}
 
+	log.Printf("[DEBUG-ZIP] preferred CSV dosyalari: %d, fallback CSV dosyalari: %d", len(preferred), len(fallback))
+	for i, f := range preferred {
+		log.Printf("[DEBUG-ZIP]   preferred[%d]: %s (size=%d)", i, f.Name, f.UncompressedSize64)
+	}
+	for i, f := range fallback {
+		log.Printf("[DEBUG-ZIP]   fallback[%d]: %s (size=%d)", i, f.Name, f.UncompressedSize64)
+	}
+
 	lists := make([]parsedList, 0, len(csvFiles))
 	warnings := make([]string, 0)
 	for _, f := range csvFiles {
+		log.Printf("[DEBUG-ZIP] CSV okunuyor: %s", f.Name)
 		rc, err := f.Open()
 		if err != nil {
+			log.Printf("[DEBUG-ZIP] CSV acilamadi: %s err=%v", f.Name, err)
 			warnings = append(warnings, "CSV acilamadi: "+f.Name)
 			continue
 		}
@@ -677,6 +932,7 @@ func parseZipPayload(payload []byte) ([]parsedList, []string, error) {
 		content, err := io.ReadAll(io.LimitReader(rc, maxImportUploadBytes+1))
 		_ = rc.Close()
 		if err != nil {
+			log.Printf("[DEBUG-ZIP] CSV okunamadi: %s err=%v", f.Name, err)
 			warnings = append(warnings, "CSV okunamadi: "+f.Name)
 			continue
 		}
@@ -685,10 +941,17 @@ func parseZipPayload(payload []byte) ([]parsedList, []string, error) {
 			continue
 		}
 
+		log.Printf("[DEBUG-ZIP] CSV icerigi (ilk 500 byte): %s", string(content[:min(len(content), 500)]))
+
 		parsed, warn, err := parseSingleCSVPayload(content, f.Name)
 		if err != nil {
+			log.Printf("[DEBUG-ZIP] CSV parse hatasi: %s err=%v", f.Name, err)
 			warnings = append(warnings, fmt.Sprintf("%s: %s", f.Name, err.Error()))
 			continue
+		}
+		log.Printf("[DEBUG-ZIP] CSV parse OK: %s -> liste=%q, item sayisi=%d", f.Name, parsed.Name, len(parsed.Items))
+		for i, item := range parsed.Items {
+			log.Printf("[DEBUG-ZIP]   item[%d]: pos=%d name=%q year=%d url=%q", i, item.Position, item.Name, item.Year, item.URL)
 		}
 		warnings = append(warnings, warn...)
 		lists = append(lists, parsed)
@@ -784,19 +1047,27 @@ func matchTMDBMovie(item *parsedListItem) {
 		return
 	}
 
+	log.Printf("[DEBUG-TMDB] Eslestirme basliyor: name=%q year=%d url=%q", item.Name, item.Year, item.URL)
+
 	source, picked, score := findBestTMDBCandidate(item)
 	if picked == nil {
+		log.Printf("[DEBUG-TMDB]   -> SONUC YOK (TMDB sonucu bulunamadi)")
 		item.Confidence = "unresolved"
 		item.Reason = "TMDB sonucu bulunamadi"
 		return
 	}
 
+	log.Printf("[DEBUG-TMDB]   -> picked: id=%d title=%q original=%q score=%d source=%s", picked.ID, picked.Title, picked.OriginalTitle, score, source)
+
 	item.Confidence = confidenceFromScore(score)
+	log.Printf("[DEBUG-TMDB]   -> confidence=%s", item.Confidence)
+
 	if item.Confidence == "unresolved" {
 		item.TmdbID = 0
 		item.MovieName = ""
 		item.PosterURL = ""
 		item.Reason = fmt.Sprintf("Dusuk eslesme skoru (%d)", score)
+		log.Printf("[DEBUG-TMDB]   -> DUSUK SKOR, unresolved: %d", score)
 		return
 	}
 
@@ -810,38 +1081,56 @@ func matchTMDBMovie(item *parsedListItem) {
 	if source == "slug" && item.Confidence == "probable" && score >= 70 {
 		item.Confidence = "exact"
 	}
+	log.Printf("[DEBUG-TMDB]   -> ESLESME OK: tmdbID=%d movieName=%q confidence=%s", item.TmdbID, item.MovieName, item.Confidence)
 }
 
 func findBestTMDBCandidate(item *parsedListItem) (string, *services.TMDBMovie, int) {
 	type querySpec struct {
 		source string
 		query  string
+		year   int // 0 = yılsız arama
 		bonus  int
 	}
 
-	queries := make([]querySpec, 0, 2)
+	queries := make([]querySpec, 0, 3)
+
+	// 1) Slug'dan isim + yıl (tam letterboxd.com/film/... URL'lerinde çalışır)
 	if slugQuery := queryFromSlug(item.URL); slugQuery != "" {
-		if item.Year > 0 {
-			slugQuery = fmt.Sprintf("%s %d", slugQuery, item.Year)
-		}
-		queries = append(queries, querySpec{source: "slug", query: slugQuery, bonus: 15})
+		queries = append(queries, querySpec{source: "slug", query: slugQuery, year: item.Year, bonus: 15})
 	}
 
-	nameQuery := item.Name
+	// 2) CSV'deki isim, yılı primary_release_year olarak geç (en doğru yöntem)
 	if item.Year > 0 {
-		nameQuery = fmt.Sprintf("%s %d", item.Name, item.Year)
+		queries = append(queries, querySpec{source: "title+year", query: item.Name, year: item.Year, bonus: 0})
 	}
-	queries = append(queries, querySpec{source: "title_year", query: nameQuery})
+
+	// 3) Sadece isim — yıl eşleşmezse veya yıl yoksa fallback
+	queries = append(queries, querySpec{source: "title_only", query: item.Name, year: 0, bonus: 0})
 
 	bestScore := -1
 	bestSource := ""
 	var bestMovie *services.TMDBMovie
 
 	for _, q := range queries {
-		res, err := searchMoviesFn(q.query)
-		if err != nil || res == nil || len(res.Results) == 0 {
+		log.Printf("[DEBUG-TMDB]   query: source=%s q=%q year=%d", q.source, q.query, q.year)
+		var (
+			res *services.TMDBSearchResponse
+			err error
+		)
+		if q.year > 0 {
+			res, err = services.SearchMoviesWithYear(q.query, q.year)
+		} else {
+			res, err = searchMoviesFn(q.query)
+		}
+		if err != nil {
+			log.Printf("[DEBUG-TMDB]   -> HATA: %v", err)
 			continue
 		}
+		if res == nil || len(res.Results) == 0 {
+			log.Printf("[DEBUG-TMDB]   -> BOS SONUC")
+			continue
+		}
+		log.Printf("[DEBUG-TMDB]   -> %d sonuc geldi", len(res.Results))
 
 		for i := range res.Results {
 			m := res.Results[i]
@@ -853,6 +1142,11 @@ func findBestTMDBCandidate(item *parsedListItem) (string, *services.TMDBMovie, i
 				bestMovie = &picked
 			}
 		}
+
+		// Mükemmel eşleşme — diğer sorgulara gerek yok
+		if bestScore >= 90 {
+			break
+		}
 	}
 
 	return bestSource, bestMovie, bestScore
@@ -862,12 +1156,29 @@ func scoreTMDBCandidate(item *parsedListItem, m services.TMDBMovie, idx int) int
 	score := 0
 	titleA := strings.ToLower(strings.TrimSpace(item.Name))
 	titleB := strings.ToLower(strings.TrimSpace(m.Title))
+	originalB := strings.ToLower(strings.TrimSpace(m.OriginalTitle))
 
+	// Hem çevrilmiş title hem original_title ile karşılaştır, en yüksek skoru al
+	titleScore := 0
 	switch {
 	case titleA != "" && titleA == titleB:
-		score += 60
+		titleScore = 60
 	case titleA != "" && (strings.Contains(titleB, titleA) || strings.Contains(titleA, titleB)):
-		score += 30
+		titleScore = 30
+	}
+
+	originalScore := 0
+	switch {
+	case titleA != "" && titleA == originalB:
+		originalScore = 60
+	case titleA != "" && (strings.Contains(originalB, titleA) || strings.Contains(titleA, originalB)):
+		originalScore = 30
+	}
+
+	if originalScore > titleScore {
+		score += originalScore
+	} else {
+		score += titleScore
 	}
 
 	y := parseYearFromRelease(m.ReleaseDate)

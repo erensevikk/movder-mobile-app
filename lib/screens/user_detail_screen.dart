@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -6,15 +6,18 @@ import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import '../models/movie.dart';
 import '../services/api_service.dart';
+import 'list_detail_screen.dart';
 
 class UserDetailScreen extends StatefulWidget {
   final String userId;
   final bool isMe;
+  final bool openImportOnStart;
 
   const UserDetailScreen({
     super.key,
     required this.userId,
     this.isMe = false,
+    this.openImportOnStart = false,
   });
 
   @override
@@ -26,11 +29,25 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
   Map<String, dynamic>? _profileData;
   List<Map<String, dynamic>> _userLists = [];
   bool _isImporting = false;
+  String _coverUrl = ''; // Kapak fotoğrafı URL'si
+  bool _letterboxdImported = false;
+  bool _isEditMode = false;
+  final TextEditingController _descriptionController = TextEditingController();
+
+  @override
+  void dispose() {
+    _descriptionController.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
     super.initState();
-    _fetchProfile();
+    _fetchProfile().then((_) {
+      if (widget.openImportOnStart && mounted) {
+        _startLetterboxdImport();
+      }
+    });
   }
 
   Future<void> _fetchProfile() async {
@@ -56,9 +73,14 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
     if (mounted) {
       setState(() {
         _profileData = data;
+        _coverUrl = (data?['coverUrl'] ?? '').toString();
+        _letterboxdImported = data?['letterboxdImported'] == true;
         _userLists = listsData;
         _isLoading = false;
       });
+      // Controller'a mevcut description'u ata
+      final raw = (data?['description'] ?? '').toString();
+      _descriptionController.text = raw;
     }
   }
 
@@ -95,8 +117,11 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
       backgroundColor: const Color(0xFF0F0F0F),
       extendBodyBehindAppBar: true,
       appBar: AppBar(
-        backgroundColor: Colors.black.withOpacity(0.3),
+        backgroundColor: Colors.transparent,
         elevation: 0,
+        // forceMaterialTransparency: AppBar'ın hit-test engelini kaldır
+        // ("kapak değiştir" butonunun üzerini kapatan görünmez katman)
+        forceMaterialTransparency: true,
         iconTheme: const IconThemeData(color: Colors.white),
       ),
       body: CustomScrollView(
@@ -134,25 +159,100 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
         ? rawDescription.trim()
         : 'Seni tanımlayan bir şeyler yaz...';
 
+    // Kapak: önce kullanıcı kapak URL'si, yoksa ilk listede ilk film posteri
+    String effectiveCover = _coverUrl;
+    bool effectiveCoverIsTmdb = false;
+    if (effectiveCover.isEmpty) {
+      for (final list in _userLists) {
+        final items = list['items'] as List? ?? [];
+        if (items.isNotEmpty) {
+          final poster = items.first['posterUrl']?.toString() ?? '';
+          if (poster.isNotEmpty) {
+            effectiveCover = poster;
+            effectiveCoverIsTmdb = poster.startsWith('http');
+            break;
+          }
+        }
+      }
+    }
+
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Stack(
           clipBehavior: Clip.none,
           children: [
-            Container(
-              height: coverHeight,
+            // Stack boyutunu belirleyen görünmez alan
+            const SizedBox(
               width: double.infinity,
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [Color(0xFF2A2A2A), Color(0xFF151515)],
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
+              height: coverHeight + (avatarSize / 2),
+            ),
+            // Kapak fotoğrafı / gradient (üst kısma sabitlendi)
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              height: coverHeight,
+              child: GestureDetector(
+                onTap: widget.isMe && _isEditMode
+                    ? _pickAndUploadCover
+                    : (!widget.isMe && _coverUrl.isNotEmpty
+                        ? () => _showFullScreenImage(
+                            '${ApiService.baseUrl}$_coverUrl')
+                        : null),
+                child: Container(
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFF1A1A1A), Color(0xFF0F0F0F)],
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                    ),
+                    image: effectiveCover.isNotEmpty
+                        ? DecorationImage(
+                            image: NetworkImage(
+                              effectiveCoverIsTmdb
+                                  ? effectiveCover
+                                  : '${ApiService.baseUrl}$effectiveCover',
+                            ),
+                            fit: BoxFit.cover,
+                          )
+                        : null,
+                  ),
+                  // "Kapağı Değiştir" sadece edit modda görünür
+                  child: widget.isMe && _isEditMode
+                      ? Center(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: Colors.black45,
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.add_photo_alternate_rounded,
+                                    color: Colors.white70, size: 16),
+                                const SizedBox(width: 6),
+                                Text(
+                                  _coverUrl.isNotEmpty
+                                      ? 'Kapağı Değiştir'
+                                      : 'Kapak Ekle',
+                                  style: const TextStyle(
+                                      color: Colors.white70, fontSize: 13),
+                                ),
+                              ],
+                            ),
+                          ),
+                        )
+                      : null,
                 ),
               ),
             ),
+            // Avatar — artık Stack sınırları İÇİNDE
             Positioned(
-              left: 20,
-              bottom: -(avatarSize / 2),
+              left: 7,
+              bottom: 0,
               child: GestureDetector(
                 onTap: widget.isMe ? _pickAndUploadImage : null,
                 child: Container(
@@ -181,90 +281,166 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
                 ),
               ),
             ),
-            if (widget.isMe)
+            // Kamera butonu: sadece edit modda görünür
+            if (widget.isMe && _isEditMode)
               Positioned(
-                left: 85,
-                bottom: -40,
-                child: Container(
-                  padding: const EdgeInsets.all(6),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF2A2A2A),
-                    shape: BoxShape.circle,
-                    border:
-                        Border.all(color: const Color(0xFF0F0F0F), width: 3),
+                left: 69,
+                bottom: 5,
+                child: GestureDetector(
+                  onTap: _pickAndUploadImage,
+                  child: Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF2A2A2A),
+                      shape: BoxShape.circle,
+                      border:
+                          Border.all(color: const Color(0xFF0F0F0F), width: 3),
+                    ),
+                    child: const Icon(Icons.camera_alt_rounded,
+                        color: Colors.white, size: 18),
                   ),
-                  child: const Icon(Icons.camera_alt_rounded,
-                      color: Colors.white, size: 18),
                 ),
               ),
             Positioned(
               left: 118,
               right: 12,
-              bottom: -40,
+              bottom: 5,
               child: Container(
                 height: 74,
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.45),
+                  color: Colors.black,
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(color: Colors.white12),
                 ),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
-                    _buildHeaderStatItem('0', 'Anlik Eslesme'),
+                    _buildHeaderStatItem('0', 'Anlık Eşleşme'),
                     _buildHeaderStatDivider(),
                     _buildHeaderStatItem('0', 'Sohbet'),
                     _buildHeaderStatDivider(),
-                    _buildHeaderStatItem('0', 'Izleme'),
+                    _buildHeaderStatItem('0', 'İzleme'),
                   ],
                 ),
               ),
             ),
           ],
         ),
-        const SizedBox(height: (avatarSize / 2) + 8),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: Text(
-              username,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-                letterSpacing: -0.5,
-              ),
-            ),
-          ),
-        ),
         const SizedBox(height: 8),
+        // Username + "Profili Düzenle" toggle butonu
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20),
-          child: GestureDetector(
-            onTap: widget.isMe ? _editDescription : null,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: Text(
-                    description,
-                    style: TextStyle(
-                      color: hasDescription ? Colors.white54 : Colors.white38,
-                      fontSize: 14,
-                      height: 1.4,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: Text(
+                  username,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: -0.5,
+                  ),
+                ),
+              ),
+              if (widget.isMe)
+                GestureDetector(
+                  onTap: () async {
+                    if (_isEditMode) {
+                      // Edit modu kapatılınca description'u kaydet
+                      final newDesc = _descriptionController.text.trim();
+                      final currentDesc =
+                          (_profileData?['description'] ?? '').toString();
+                      if (newDesc != currentDesc) {
+                        final res = await ApiService.updateProfile(
+                          description: newDesc,
+                        );
+                        if (!mounted) return;
+                        if (res != null && res['error'] == null) {
+                          setState(() {
+                            _profileData = {
+                              ..._profileData ?? {},
+                              'description': newDesc,
+                            };
+                          });
+                        }
+                      }
+                    }
+                    setState(() => _isEditMode = !_isEditMode);
+                  },
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: _isEditMode
+                          ? Colors.redAccent.withValues(alpha: 0.15)
+                          : const Color(0xFF222222),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: _isEditMode
+                            ? Colors.redAccent.withValues(alpha: 0.5)
+                            : Colors.white12,
+                      ),
+                    ),
+                    child: Text(
+                      _isEditMode ? 'Kaydet' : 'Profili Düzenle',
+                      style: TextStyle(
+                        color: _isEditMode ? Colors.redAccent : Colors.white54,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                 ),
-                if (widget.isMe)
-                  const Padding(
-                    padding: EdgeInsets.only(left: 8.0),
-                    child: Icon(Icons.edit, color: Colors.white38, size: 16),
-                  ),
-              ],
-            ),
+            ],
           ),
+        ),
+        const SizedBox(height: 8),
+        // Description: edit modda TextField, normal modda Text
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: widget.isMe && _isEditMode
+              ? TextField(
+                  controller: _descriptionController,
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 14,
+                    height: 1.4,
+                  ),
+                  maxLines: 3,
+                  maxLength: 150,
+                  decoration: InputDecoration(
+                    hintText: 'Kendinden bahset...',
+                    hintStyle: const TextStyle(color: Colors.white24),
+                    counterStyle: const TextStyle(color: Colors.white24),
+                    filled: true,
+                    fillColor: const Color(0xFF1A1A1A),
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 10),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: const BorderSide(color: Colors.white12),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: const BorderSide(color: Colors.redAccent),
+                    ),
+                  ),
+                )
+              : Text(
+                  _descriptionController.text.isNotEmpty
+                      ? _descriptionController.text
+                      : (hasDescription
+                          ? description
+                          : 'Seni tanımlayan bir şeyler yaz...'),
+                  style: TextStyle(
+                    color: hasDescription ? Colors.white54 : Colors.white38,
+                    fontSize: 14,
+                    height: 1.4,
+                  ),
+                ),
         ),
       ],
     );
@@ -272,7 +448,52 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
 
   Future<void> _pickAndUploadImage() async {
     final picker = ImagePicker();
-    final pickedFile = await picker.pickImage(source: ImageSource.gallery);
+
+    // Galeri mi Kamera mı seç
+    final ImageSource? source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      backgroundColor: const Color(0xFF1E1E1E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_library_rounded,
+                    color: Colors.white70),
+                title: const Text('Galeriden Seç',
+                    style: TextStyle(color: Colors.white)),
+                onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+              ),
+              ListTile(
+                leading:
+                    const Icon(Icons.camera_alt_rounded, color: Colors.white70),
+                title: const Text('Kamerayı Kullan',
+                    style: TextStyle(color: Colors.white)),
+                onTap: () => Navigator.pop(ctx, ImageSource.camera),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (source == null) return; // Kullanıcı iptal etti
+
+    final pickedFile = await picker.pickImage(source: source, imageQuality: 85);
 
     if (pickedFile != null) {
       final bytes = await pickedFile.readAsBytes();
@@ -288,7 +509,7 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Profil fotoğrafı güncellendi')),
           );
-          await _fetchProfile(); // Veriyi tazelemek için
+          await _fetchProfile();
         } else {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -301,65 +522,73 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
     }
   }
 
-  Future<void> _editDescription() async {
-    final currentDesc = _profileData?['description']?.toString() ?? '';
-    final controller = TextEditingController(text: currentDesc);
-
-    final newDesc = await showDialog<String>(
-      context: context,
-      builder: (ctx) {
-        return AlertDialog(
-          backgroundColor: const Color(0xFF1E1E1E),
-          title: const Text('Hakkında', style: TextStyle(color: Colors.white)),
-          content: TextField(
-            controller: controller,
-            style: const TextStyle(color: Colors.white),
-            maxLines: 3,
-            decoration: const InputDecoration(
-              hintText: 'Kendinden bahset...',
-              hintStyle: TextStyle(color: Colors.white38),
-              enabledBorder: OutlineInputBorder(
-                borderSide: BorderSide(color: Colors.white24),
+  /// Tam ekran fotoğraf görüntüleyici
+  void _showFullScreenImage(String imageUrl) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => Scaffold(
+          backgroundColor: Colors.black,
+          body: Stack(
+            fit: StackFit.expand,
+            children: [
+              InteractiveViewer(
+                child: Image.network(
+                  imageUrl,
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, __, ___) => const Center(
+                    child: Icon(Icons.broken_image,
+                        color: Colors.white38, size: 64),
+                  ),
+                ),
               ),
-              focusedBorder: OutlineInputBorder(
-                borderSide: BorderSide(color: Colors.redAccent),
+              Positioned(
+                top: 40,
+                right: 16,
+                child: GestureDetector(
+                  onTap: () => Navigator.pop(context),
+                  child: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: const BoxDecoration(
+                      color: Colors.black54,
+                      shape: BoxShape.circle,
+                    ),
+                    child:
+                        const Icon(Icons.close, color: Colors.white, size: 22),
+                  ),
+                ),
               ),
-            ),
+            ],
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child:
-                  const Text('İptal', style: TextStyle(color: Colors.white54)),
-            ),
-            ElevatedButton(
-              onPressed: () => Navigator.pop(ctx, controller.text),
-              style:
-                  ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
-              child: const Text('Kaydet'),
-            ),
-          ],
-        );
-      },
+        ),
+      ),
     );
+  }
 
-    if (newDesc != null && newDesc != currentDesc) {
+  /// Kapak fotoğrafı değiştir — direkt galeri açılır
+  Future<void> _pickAndUploadCover() async {
+    final picker = ImagePicker();
+    final pickedFile =
+        await picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
+
+    if (pickedFile != null && mounted) {
+      final bytes = await pickedFile.readAsBytes();
+      final res = await ApiService.updateProfile(
+        coverImageBytes: bytes,
+        coverImageFileName: pickedFile.name,
+      );
       if (!mounted) return;
-      setState(() => _isLoading = true);
-
-      final res = await ApiService.updateProfile(description: newDesc);
-
-      if (mounted) {
-        if (res != null && res['error'] == null) {
-          _profileData?['description'] = res['description'];
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-                content: Text(
-                    (res?['error'] ?? 'Açıklama güncellenemedi').toString())),
-          );
-        }
-        setState(() => _isLoading = false);
+      if (res != null && res['error'] == null) {
+        setState(() {
+          _coverUrl = (res['coverUrl'] ?? _coverUrl).toString();
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Kapak fotoğrafı güncellendi ✓')),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text((res?['error'] ?? 'Kapak yüklenemedi').toString())),
+        );
       }
     }
   }
@@ -398,10 +627,14 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
   }
 
   Widget _buildFavoriteFilmsOrEmptyState() {
-    const bool hasFavorites = false; // Şimdilik hep boş gösteriyoruz
+    // Kullanıcının listelerden herhangi birinde film var mı?
+    final hasContent = _userLists.any((list) {
+      final items = list['items'] as List? ?? [];
+      return items.isNotEmpty;
+    });
 
     return Padding(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.fromLTRB(20, 48, 20, 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -418,38 +651,70 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
                 ),
               ),
               if (widget.isMe)
-                GestureDetector(
-                  onTap: _showCreateListDialog,
-                  child: Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF1E1E1E),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.white10),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // + Butonu (Liste Oluştur)
+                    GestureDetector(
+                      onTap: _showCreateListDialog,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1E1E1E),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.white10),
+                        ),
+                        child: const Icon(Icons.add,
+                            color: Colors.white70, size: 14),
+                      ),
                     ),
-                    child: const Row(
-                      children: [
-                        Icon(Icons.add, color: Colors.white70, size: 14),
-                        SizedBox(width: 4),
-                        Text(
-                          'Liste Oluştur',
+                    if (_userLists.isNotEmpty) ...[
+                      const SizedBox(width: 8),
+                      GestureDetector(
+                        onTap: () {
+                          // Favori listeyi bulmaya çalış, yoksa ilk listeyi aç
+                          final targetList = _userLists.firstWhere(
+                            (l) =>
+                                l['name']
+                                    ?.toString()
+                                    .toLowerCase()
+                                    .contains('favori') ??
+                                false,
+                            orElse: () => _userLists.first,
+                          );
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => ListDetailScreen(
+                                listData: targetList,
+                                isMe: widget.isMe,
+                              ),
+                            ),
+                          ).then((_) => _fetchProfile());
+                        },
+                        child: const Text(
+                          'Listeyi Düzenle',
                           style: TextStyle(
                             color: Colors.white70,
-                            fontSize: 12,
+                            fontSize: 13,
                             fontWeight: FontWeight.w600,
                           ),
                         ),
-                      ],
-                    ),
-                  ),
+                      ),
+                    ],
+                  ],
                 ),
             ],
           ),
           const SizedBox(height: 16),
-          if (!hasFavorites && widget.isMe)
+          // İçerik durumuna göre CTA / boş durum seç
+          if (!hasContent && widget.isMe && !_letterboxdImported)
             _buildLetterboxdCTA()
-          else if (!hasFavorites && !widget.isMe)
+          else if (!hasContent && widget.isMe && _letterboxdImported)
+            // Import yapılmış ama hiç film yok — Ekle butonu
+            _buildAddFavoritesButton()
+          else if (!hasContent && !widget.isMe)
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(24),
@@ -470,8 +735,13 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
                 ],
               ),
             )
-          else
-            _buildFavoritesGrid(),
+          else ...[
+            // Tüm listelerdeki filmleri topla (ilk 4 tane)
+            _buildFavoritesGrid(_userLists
+                .expand((list) => (list['items'] as List? ?? []))
+                .take(4)
+                .toList()),
+          ],
         ],
       ),
     );
@@ -543,29 +813,76 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
     );
   }
 
-  Widget _buildFavoritesGrid() {
+  Widget _buildAddFavoritesButton() {
+    return GestureDetector(
+      onTap: _showCreateListDialog,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 28),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1E1E1E),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.white10),
+        ),
+        child: const Column(
+          children: [
+            Icon(Icons.add_circle_outline_rounded,
+                color: Colors.white38, size: 40),
+            SizedBox(height: 10),
+            Text(
+              'Favori Film Ekle',
+              style: TextStyle(
+                color: Colors.white54,
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFavoritesGrid(List<dynamic> movies) {
+    if (movies.isEmpty) return const SizedBox.shrink();
+
     return Row(
-      children: List.generate(
-        4,
-        (index) => Expanded(
-          child: Padding(
-            padding: EdgeInsets.only(right: index == 3 ? 0 : 8),
-            child: AspectRatio(
-              aspectRatio: 2 / 3,
-              child: Container(
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1E1E1E),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.white10),
-                ),
-                child: const Center(
-                  child: Icon(Icons.movie, color: Colors.white24),
+      children: [
+        ...movies.asMap().entries.map((entry) {
+          final index = entry.key;
+          final movie = entry.value;
+          final posterUrl = movie['posterUrl']?.toString() ?? '';
+
+          return Expanded(
+            child: Padding(
+              padding:
+                  EdgeInsets.only(right: index == movies.length - 1 ? 0 : 8),
+              child: AspectRatio(
+                aspectRatio: 2 / 3,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1B1B1B),
+                    borderRadius: BorderRadius.circular(8),
+                    border:
+                        Border.all(color: Colors.white.withValues(alpha: 0.05)),
+                    image: posterUrl.isNotEmpty
+                        ? DecorationImage(
+                            image: NetworkImage(posterUrl.startsWith('http')
+                                ? posterUrl
+                                : '${ApiService.baseUrl}$posterUrl'),
+                            fit: BoxFit.cover,
+                          )
+                        : null,
+                  ),
                 ),
               ),
             ),
-          ),
-        ),
-      ),
+          );
+        }),
+        // Eğer 4'ten az film varsa, sağ tarafı boş bırakmak için boş Expandedlar eklemiyoruz
+        // (Kullanıcı 'boş duran kartlar kaldırılsın' dediği için sadece posterleri gösteriyoruz)
+        if (movies.length < 4) Spacer(flex: 4 - movies.length),
+      ],
     );
   }
 
@@ -607,13 +924,18 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                  if (items.isNotEmpty) // Gerekirse her zaman çıksın
+                  if (widget.isMe)
                     GestureDetector(
                       onTap: () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                              content: Text('Hepsini gör ekranı hazırlanıyor')),
-                        );
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => ListDetailScreen(
+                              listData: userList,
+                              isMe: widget.isMe,
+                            ),
+                          ),
+                        ).then((_) => _fetchProfile());
                       },
                       child: const Text(
                         'Listeyi Düzenle',
@@ -863,10 +1185,6 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
       builder: (ctx) {
         return StatefulBuilder(
           builder: (ctx, setSheetState) {
-            final canCreate = titleController.text.trim().isNotEmpty &&
-                selectedMovies.isNotEmpty &&
-                !isSaving;
-
             return FractionallySizedBox(
               heightFactor: 0.92,
               child: Container(
@@ -914,7 +1232,11 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
                         TextField(
                           controller: titleController,
                           style: const TextStyle(color: Colors.white),
-                          onChanged: (_) => setSheetState(() {}),
+                          inputFormatters: [
+                            FilteringTextInputFormatter.allow(
+                              RegExp(r'[a-zA-ZğüşıöçĞÜŞİÖÇ\s]'),
+                            ),
+                          ],
                           decoration: InputDecoration(
                             hintText: 'Koleksiyon adı',
                             hintStyle: const TextStyle(color: Colors.white38),
@@ -1043,7 +1365,7 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
                                 : searchResults.isEmpty
                                     ? const Center(
                                         child: Text(
-                                          'Film eklemek icin arama yap.',
+                                          'Film eklemek için arama yap.',
                                           style:
                                               TextStyle(color: Colors.white38),
                                         ),
@@ -1104,71 +1426,84 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
                           ),
                         ),
                         const SizedBox(height: 12),
-                        SizedBox(
-                          width: double.infinity,
-                          height: 50,
-                          child: ElevatedButton(
-                            onPressed: !canCreate
-                                ? null
-                                : () async {
-                                    setSheetState(() => isSaving = true);
+                        ValueListenableBuilder<TextEditingValue>(
+                          valueListenable: titleController,
+                          builder: (context, titleValue, _) {
+                            final canCreate =
+                                titleValue.text.trim().isNotEmpty &&
+                                    selectedMovies.isNotEmpty &&
+                                    !isSaving;
 
-                                    final createRes =
-                                        await ApiService.createList(
-                                      name: titleController.text.trim(),
-                                      description: descController.text.trim(),
-                                      isPublic: true,
-                                    );
+                            return SizedBox(
+                              width: double.infinity,
+                              height: 50,
+                              child: ElevatedButton(
+                                onPressed: !canCreate
+                                    ? null
+                                    : () async {
+                                        setSheetState(() => isSaving = true);
 
-                                    final listId =
-                                        _extractListId(createRes?['listId']);
-                                    if (createRes == null ||
-                                        createRes['error'] != null ||
-                                        listId == null) {
-                                      setSheetState(() => isSaving = false);
-                                      if (mounted) {
-                                        ScaffoldMessenger.of(context)
-                                            .showSnackBar(
-                                          SnackBar(
-                                            content: Text((createRes?[
-                                                        'error'] ??
-                                                    'Koleksiyon olusturulamadi')
-                                                .toString()),
-                                          ),
+                                        if (!mounted) return;
+
+                                        final createRes =
+                                            await ApiService.createList(
+                                          name: titleController.text.trim(),
+                                          description:
+                                              descController.text.trim(),
+                                          isPublic: true,
                                         );
-                                      }
-                                      return;
-                                    }
 
-                                    for (final movie in selectedMovies) {
-                                      await ApiService.addMovieToList(
-                                        listId: listId,
-                                        tmdbId: movie.id,
-                                        movieName: movie.title,
-                                        posterUrl: movie.posterUrl,
-                                      );
-                                    }
+                                        final listId = _extractListId(
+                                            createRes?['listId']);
+                                        if (createRes == null ||
+                                            createRes['error'] != null ||
+                                            listId == null) {
+                                          setSheetState(() => isSaving = false);
+                                          if (mounted) {
+                                            ScaffoldMessenger.of(this.context)
+                                                .showSnackBar(
+                                              SnackBar(
+                                                content: Text((createRes?[
+                                                            'error'] ??
+                                                        'Koleksiyon oluşturulamadı')
+                                                    .toString()),
+                                              ),
+                                            );
+                                          }
+                                          return;
+                                        }
 
-                                    if (ctx.mounted) {
-                                      Navigator.pop(ctx, true);
-                                    }
-                                  },
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF00E054),
-                              foregroundColor: Colors.black,
-                              disabledBackgroundColor: Colors.white12,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
+                                        for (final movie in selectedMovies) {
+                                          await ApiService.addMovieToList(
+                                            listId: listId,
+                                            tmdbId: movie.id,
+                                            movieName: movie.title,
+                                            posterUrl: movie.posterUrl,
+                                          );
+                                        }
+
+                                        if (ctx.mounted) {
+                                          Navigator.pop(ctx, true);
+                                        }
+                                      },
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFF00E054),
+                                  foregroundColor: Colors.black,
+                                  disabledBackgroundColor: Colors.white12,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                ),
+                                child: Text(
+                                  isSaving
+                                      ? 'Oluşturuluyor...'
+                                      : 'Koleksiyonu Oluştur (${selectedMovies.length})',
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w700),
+                                ),
                               ),
-                            ),
-                            child: Text(
-                              isSaving
-                                  ? 'Olusturuluyor...'
-                                  : 'Koleksiyonu Olustur (${selectedMovies.length})',
-                              style:
-                                  const TextStyle(fontWeight: FontWeight.w700),
-                            ),
-                          ),
+                            );
+                          },
                         ),
                       ],
                     ),
@@ -1185,7 +1520,7 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
 
     if (created == true && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Koleksiyon olusturuldu.')),
+        const SnackBar(content: Text('Koleksiyon oluşturuldu.')),
       );
       await _fetchProfile();
     }
@@ -1241,6 +1576,8 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
   }
 
   Widget _buildRecentActivity() {
+    final history = (_profileData?['watchHistory'] as List?) ?? [];
+
     return Padding(
       padding: const EdgeInsets.all(20),
       child: Column(
@@ -1256,14 +1593,43 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
             ),
           ),
           const SizedBox(height: 16),
-          Container(
-            padding: const EdgeInsets.symmetric(vertical: 32),
-            alignment: Alignment.center,
-            child: const Text(
-              'Son aktivite bulunamadı',
-              style: TextStyle(color: Colors.white38),
+          if (history.isEmpty)
+            Container(
+              padding: const EdgeInsets.symmetric(vertical: 32),
+              alignment: Alignment.center,
+              child: const Text(
+                'Son aktivite bulunamadı',
+                style: TextStyle(color: Colors.white38),
+              ),
+            )
+          else
+            SizedBox(
+              height: 140,
+              child: ListView.builder(
+                scrollDirection: Axis.horizontal,
+                itemCount: history.length,
+                itemBuilder: (context, index) {
+                  final item = history[index];
+                  final posterPath = item['posterPath']?.toString() ?? '';
+                  final imageUrl = posterPath.startsWith('http')
+                      ? posterPath
+                      : '${ApiService.baseUrl}$posterPath';
+
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 12),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: _moviePosterThumb(
+                        _thumbPosterUrl(imageUrl),
+                        width: 93,
+                        height: 140,
+                        cacheWidth: 150,
+                      ),
+                    ),
+                  );
+                },
+              ),
             ),
-          ),
         ],
       ),
     );
@@ -1285,7 +1651,7 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              'Dosya secici baslatilamadi. Uygulamayi tamamen kapatip yeniden acin.',
+              'Dosya seçici başlatılamadı. Uygulamayı tamamen kapatıp yeniden açın.',
             ),
           ),
         );
@@ -1357,6 +1723,10 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
       }
 
       await _showImportResultDialog(result);
+
+      if (mounted) {
+        await _fetchProfile();
+      }
     } finally {
       if (mounted) {
         setState(() => _isImporting = false);

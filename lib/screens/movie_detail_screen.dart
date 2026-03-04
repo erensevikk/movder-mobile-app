@@ -56,7 +56,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           _isWatchingThis = false;
         });
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('İzleme durumu sonlandırıldı.')),
+          const SnackBar(content: Text('İzleme durumunuz sonlandı.')),
         );
       }
     } else {
@@ -72,8 +72,8 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
         });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-              content:
-                  Text('${currentMovie.title} izleniyor olarak işaretlendi!')),
+              content: Text(
+                  'Durumunuz ${currentMovie.title} izliyor olarak güncellendi!')),
         );
       } else if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -126,10 +126,37 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                     ),
                   ),
                   const SizedBox(height: 12),
+                  if (currentMovie.isOverviewFallback)
+                    Container(
+                      margin: const EdgeInsets.only(bottom: 12),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.amber.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(8),
+                        border:
+                            Border.all(color: Colors.amber.withValues(alpha: 0.3)),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.info_outline,
+                              color: Colors.amber, size: 20),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              "Bu film, henüz Türkçe özet içermediğinden dolayı İngilizce özet gösteriliyor.",
+                              style: TextStyle(
+                                color: Colors.amber.shade200,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   Text(
                     currentMovie.overview.isNotEmpty
                         ? currentMovie.overview
-                        : "Bu film için Türkçe özet bulunmuyor.",
+                        : "Bu film için detaylı bir özet bulunmuyor.",
                     style: const TextStyle(
                       color: Colors.white70,
                       fontSize: 15,
@@ -188,9 +215,9 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                   decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.72),
+                    color: Colors.black.withValues(alpha: 0.72),
                     border: Border.all(
-                        color: Colors.redAccent.withOpacity(0.8), width: 1),
+                        color: Colors.redAccent.withValues(alpha: 0.8), width: 1),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Row(
@@ -256,9 +283,9 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               decoration: BoxDecoration(
-                color: Colors.amber.withOpacity(0.2),
+                color: Colors.amber.withValues(alpha: 0.2),
                 borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: Colors.amber.withOpacity(0.5)),
+                border: Border.all(color: Colors.amber.withValues(alpha: 0.5)),
               ),
               child: Row(
                 children: [

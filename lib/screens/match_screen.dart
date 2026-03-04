@@ -3,20 +3,24 @@ import 'dart:async';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
+import 'user_detail_screen.dart';
+import 'chat_detail_screen.dart';
 
 class MatchScreen extends StatefulWidget {
   const MatchScreen({super.key});
 
   @override
-  State<MatchScreen> createState() => _MatchScreenState();
+  State<MatchScreen> createState() => MatchScreenState();
 }
 
-class _MatchScreenState extends State<MatchScreen>
+class MatchScreenState extends State<MatchScreen>
     with TickerProviderStateMixin {
-  bool _isLocalSearch = false; // false = Genel Arama, true = Aynı Şehirde Arama
-  final int _queueCount = 42; // Temsili bekleyen sayısı
+  bool _isScreenVisible = false;
 
-  bool _isPreparingAssets = false;
+  bool _isLocalSearch = false; // false = Genel Arama, true = Aynı Şehirde Arama
+  int _queueCount = 0;
+  int _watchingTmdbId = 0;
+  final bool _isPreparingAssets = false;
   bool _isSearching = false;
 
   bool _isWatching = false;
@@ -41,6 +45,8 @@ class _MatchScreenState extends State<MatchScreen>
   bool _isUserSearching = false;
   List<Map<String, dynamic>> _userSearchResults = [];
   int _userSearchRequestId = 0;
+  String _userCity = '';
+  String _myUserId = '';
 
   @override
   void initState() {
@@ -72,12 +78,13 @@ class _MatchScreenState extends State<MatchScreen>
     _slideController.addStatusListener((status) {
       if (status == AnimationStatus.completed &&
           _slideshowActive &&
-          _slideshowPosters.isNotEmpty &&
-          _isSearching) {
+          _slideshowPosters.isNotEmpty) {
         setState(() {
           _slideIndex = (_slideIndex + 1) % _slideshowPosters.length;
         });
-        _slideController.forward(from: 0);
+        if (_isScreenVisible) {
+          _slideController.forward(from: 0);
+        }
       }
     });
 
@@ -86,6 +93,9 @@ class _MatchScreenState extends State<MatchScreen>
 
   @override
   void dispose() {
+    if (_isSearching && _watchingTmdbId > 0) {
+      ApiService.cancelMatch(_watchingTmdbId);
+    }
     _pulseController.dispose();
     _slideController.dispose();
     _stopDots();
@@ -144,217 +154,6 @@ class _MatchScreenState extends State<MatchScreen>
     });
   }
 
-  Future<void> _openUserProfile(String userId) async {
-    final profile = await ApiService.getUserProfile(userId);
-    if (!mounted) return;
-    if (profile == null) return;
-
-    final username = (profile['username'] ?? '').toString();
-    final city = (profile['city'] ?? '').toString();
-    final isFriend = profile['isFriend'] == true;
-    final isMatched = profile['isMatched'] == true;
-    final canSeeWatching = profile['canSeeWatching'] == true;
-    final watching = profile['watching'] == true;
-
-    final status = profile['status'] as Map<String, dynamic>?;
-    final movieName = (status?['movieName'] ?? '').toString();
-    final watchingFor = (profile['watchingFor'] ?? '').toString();
-
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: const Color(0xFF151515),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '@$username',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  city.isNotEmpty ? city : 'Şehir bilgisi yok',
-                  style: const TextStyle(color: Colors.white70, fontSize: 14),
-                ),
-                const SizedBox(height: 14),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    _buildInfoBadge(
-                      isFriend ? 'Arkadaş' : 'Arkadaş değil',
-                      isFriend ? Colors.greenAccent : Colors.white24,
-                    ),
-                    _buildInfoBadge(
-                      isMatched ? 'Eşleşmiş' : 'Eşleşmemiş',
-                      isMatched ? Colors.blueAccent : Colors.white24,
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 18),
-                if (canSeeWatching && watching && movieName.isNotEmpty)
-                  Text(
-                    watchingFor.isNotEmpty
-                        ? 'Anlık izliyor: $movieName · $watchingFor'
-                        : 'Anlık izliyor: $movieName',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  )
-                else if (!canSeeWatching)
-                  const Text(
-                    'Bu kullanıcının anlık izleme durumu yalnızca arkadaşlara veya eşleşen kullanıcılara açıktır.',
-                    style: TextStyle(
-                      color: Colors.white70,
-                      fontSize: 14,
-                      height: 1.4,
-                    ),
-                  )
-                else
-                  const Text(
-                    'Kullanıcı şu an aktif olarak bir şey izlemiyor.',
-                    style: TextStyle(color: Colors.white70, fontSize: 14),
-                  ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildInfoBadge(String text, Color color) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.16),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: color.withOpacity(0.55)),
-      ),
-      child: Text(
-        text,
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildUserSearchSection() {
-    final hasQuery = _userSearchController.text.trim().length >= 2;
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
-      child: Column(
-        children: [
-          TextField(
-            controller: _userSearchController,
-            onChanged: _onUserSearchChanged,
-            style: const TextStyle(color: Colors.white),
-            decoration: InputDecoration(
-              hintText: 'Kullanıcı adı ile ara...',
-              hintStyle: const TextStyle(color: Colors.white54),
-              prefixIcon: const Icon(Icons.search, color: Colors.white70),
-              filled: true,
-              fillColor: Colors.white.withOpacity(0.10),
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(14),
-                borderSide: BorderSide.none,
-              ),
-            ),
-          ),
-          if (hasQuery)
-            Container(
-              margin: const EdgeInsets.only(top: 8),
-              constraints: const BoxConstraints(maxHeight: 200),
-              decoration: BoxDecoration(
-                color: const Color(0xFF171717),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.white12),
-              ),
-              child: _isUserSearching
-                  ? const Center(
-                      child: Padding(
-                        padding: EdgeInsets.all(16),
-                        child: SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2.4,
-                            color: Colors.white70,
-                          ),
-                        ),
-                      ),
-                    )
-                  : _userSearchResults.isEmpty
-                      ? const Padding(
-                          padding: EdgeInsets.all(14),
-                          child: Text(
-                            'Kullanıcı bulunamadı',
-                            style: TextStyle(color: Colors.white70),
-                          ),
-                        )
-                      : ListView.separated(
-                          shrinkWrap: true,
-                          itemCount: _userSearchResults.length,
-                          separatorBuilder: (_, __) =>
-                              Divider(color: Colors.white.withOpacity(0.08)),
-                          itemBuilder: (context, index) {
-                            final user = _userSearchResults[index];
-                            final username =
-                                (user['username'] ?? '').toString();
-                            final city = (user['city'] ?? '').toString();
-                            final userId = (user['userId'] ?? user['_id'] ?? '')
-                                .toString();
-
-                            return ListTile(
-                              dense: true,
-                              leading: CircleAvatar(
-                                backgroundColor: Colors.redAccent,
-                                child: Text(
-                                  username.isNotEmpty
-                                      ? username[0].toUpperCase()
-                                      : '?',
-                                  style: const TextStyle(color: Colors.white),
-                                ),
-                              ),
-                              title: Text(
-                                username,
-                                style: const TextStyle(color: Colors.white),
-                              ),
-                              subtitle: Text(
-                                city.isNotEmpty ? city : 'Şehir bilgisi yok',
-                                style: const TextStyle(color: Colors.white54),
-                              ),
-                              onTap: userId.isEmpty
-                                  ? null
-                                  : () => _openUserProfile(userId),
-                            );
-                          },
-                        ),
-            ),
-        ],
-      ),
-    );
-  }
-
   String _posterUrl(String posterPath) {
     final clean = posterPath.trim();
     if (clean.isEmpty) return '';
@@ -363,6 +162,8 @@ class _MatchScreenState extends State<MatchScreen>
 
   Future<void> _loadWatchingStatus() async {
     final statusData = await ApiService.getMyWatchStatus();
+    final queueCount = await ApiService.getQueueCount();
+
     if (!mounted) return;
 
     if (statusData != null && statusData['watching'] == true) {
@@ -372,14 +173,82 @@ class _MatchScreenState extends State<MatchScreen>
         _watchingMovieName = (status?['movieName'] ?? '').toString();
         _watchingFor = (statusData['watchingFor'] ?? '').toString();
         _watchingPosterPath = (status?['posterPath'] ?? '').toString();
+        // Parse tmdbId defensively
+        final rawTmdbId = status?['tmdbId'];
+        if (rawTmdbId is int) {
+          _watchingTmdbId = rawTmdbId;
+        } else if (rawTmdbId != null) {
+          _watchingTmdbId = int.tryParse(rawTmdbId.toString()) ?? 0;
+        } else {
+          _watchingTmdbId = 0;
+        }
+        _queueCount = queueCount;
       });
-    } else {
+    } else if (statusData != null) {
+      // Backend açıkça "watching: false" döndüyse sıfırla.
+      // statusData == null ise (API hatası / timeout) mevcut state'i koru.
       setState(() {
         _isWatching = false;
         _watchingMovieName = '';
         _watchingFor = '';
         _watchingPosterPath = '';
+        _watchingTmdbId = 0;
+        _queueCount = queueCount;
       });
+    } else {
+      // API hatası → sadece kuyruk sayısını güncelle, izleme durumunu KORUMA altında tut
+      setState(() {
+        _queueCount = queueCount;
+      });
+    }
+
+    // Kullanıcının şehrini profilinden alalım (Hangi şehirden eşleşme aradığını göstermek için)
+    final profileData = await ApiService.getProfile();
+    if (mounted && profileData != null) {
+      setState(() {
+        _userCity = (profileData['city'] ?? '').toString();
+        _myUserId = (profileData['userId'] ??
+                profileData['_id'] ??
+                profileData['id'] ??
+                '')
+            .toString();
+      });
+    }
+
+    if (!_slideshowActive) {
+      _initBackgroundSlideshow();
+    }
+  }
+
+  void setVisibility(bool visible) {
+    if (_isScreenVisible == visible) return;
+    setState(() {
+      _isScreenVisible = visible;
+    });
+    if (visible && _slideshowActive) {
+      // Resume or restart animation if it should be running
+      if (_slideController.isCompleted) {
+        _slideController.forward(from: 0);
+      } else if (!_slideController.isAnimating) {
+        _slideController.forward();
+      }
+    } else if (!visible && _slideController.isAnimating) {
+      // Pause animation
+      _slideController.stop();
+    }
+  }
+
+  Future<void> reloadWatchingStatus() async {
+    await _loadWatchingStatus();
+  }
+
+  Future<void> _initBackgroundSlideshow() async {
+    final posters = await _buildTopPosterList();
+    if (!mounted) return;
+    await _precacheTopPosters(posters);
+    if (!mounted) return;
+    if (posters.isNotEmpty) {
+      _startSlideshow(posters);
     }
   }
 
@@ -468,7 +337,9 @@ class _MatchScreenState extends State<MatchScreen>
       _slideshowActive = true;
     });
 
-    _slideController.forward(from: 0);
+    if (_isScreenVisible) {
+      _slideController.forward(from: 0);
+    }
   }
 
   void _stopSlideshow() {
@@ -481,94 +352,101 @@ class _MatchScreenState extends State<MatchScreen>
   }
 
   Future<void> _startSearch() async {
-    if (_isSearching || _isPreparingAssets) return;
+    if (_isSearching || !_isWatching) return;
 
     final currentRequestId = ++_searchRequestId;
 
     setState(() {
-      _isPreparingAssets = true;
-    });
-
-    final posters = await _buildTopPosterList();
-
-    if (!mounted || currentRequestId != _searchRequestId) return;
-
-    await _precacheTopPosters(posters);
-
-    if (!mounted || currentRequestId != _searchRequestId) return;
-
-    setState(() {
-      _isPreparingAssets = false;
       _isSearching = true;
     });
     _startDots();
 
-    if (posters.isNotEmpty) {
-      _startSlideshow(posters);
-    } else {
-      _stopSlideshow();
+    bool keepSearching = true;
+    while (keepSearching &&
+        context.mounted &&
+        currentRequestId == _searchRequestId) {
+      final matchRes = await ApiService.checkMatch(_watchingTmdbId);
+
+      if (!context.mounted || currentRequestId != _searchRequestId) break;
+
+      if (matchRes != null && matchRes['matched'] == true) {
+        keepSearching = false;
+        final matchData = matchRes['match'];
+
+        final user1Id = (matchData?['user1Id'] ?? '').toString();
+        final user2Id = (matchData?['user2Id'] ?? '').toString();
+        final user1Name = (matchData?['user1Name'] ?? '').toString();
+        final user2Name = (matchData?['user2Name'] ?? '').toString();
+        final roomId = (matchData?['roomId'] ?? '').toString();
+
+        final String targetUserId = (_myUserId == user1Id) ? user2Id : user1Id;
+        final String otherUserName =
+            (_myUserId == user1Id) ? user2Name : user1Name;
+
+        if (!mounted) return;
+
+        setState(() => _isSearching = false);
+        _stopDots();
+
+        // O anki arama request ID'sini kaydet ki devam etmemiz gerekirse bilelim
+        final currentReqIdSnapshot = currentRequestId;
+
+        // Tam ekran kabul/red ekranı
+        // overlay kapandığında bool bir sonuç döndürelim:
+        // true: sohbet odasına geçildi (bu aramayı tamamen durdur)
+        // false: reddedildi veya zaman aşımı (aynı arama ile devam et/yeniden sıraya gir)
+        final bool chatJoined = await Navigator.push(
+              context,
+              PageRouteBuilder(
+                opaque: false,
+                transitionDuration: const Duration(milliseconds: 350),
+                pageBuilder: (_, __, ___) => MatchFoundOverlay(
+                  otherUserName: otherUserName,
+                  targetUserId: targetUserId,
+                  myUserId: _myUserId,
+                  roomId: roomId,
+                  movieName: _watchingMovieName,
+                  posterUrl: _watchingPosterPath.isNotEmpty
+                      ? _posterUrl(_watchingPosterPath)
+                      : null,
+                ),
+              ),
+            ) ??
+            false;
+
+        if (!mounted || currentRequestId != currentReqIdSnapshot) break;
+
+        if (chatJoined) {
+          // Sohbet odasına başarıyla geçildi -> aramayı tamamen komple bitir.
+          keepSearching = false;
+        } else {
+          // Ya kendisi reddetti, ya karşı taraf reddetti, ya da süre bitti. -> tekrar sıraya gir
+          // API tarafında iptal endpointini de çagırabiliriz ama zaten timeout olduğunda süre bitmiş olur.
+          setState(() {
+            _isSearching = true; // Tekrar arama UI'sine dön
+          });
+          _startDots();
+        }
+      } else {
+        await Future.delayed(const Duration(seconds: 3));
+      }
     }
+  }
 
-    // Sahte arama süreci (3 saniye sonra eşleşme bulundu ekranı)
-    Future.delayed(const Duration(seconds: 3), () {
-      if (!mounted || currentRequestId != _searchRequestId) return;
-
-      showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-          backgroundColor: const Color(0xFF1E1E1E),
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: Row(
-            children: [
-              Icon(
-                _isLocalSearch ? Icons.location_on : Icons.public,
-                color: _isLocalSearch ? Colors.blueAccent : Colors.redAccent,
-              ),
-              const SizedBox(width: 8),
-              const Text('Eşleşme Bulundu!',
-                  style: TextStyle(color: Colors.white)),
-            ],
-          ),
-          content: Text(
-            _isLocalSearch
-                ? 'Seninle aynı şehirde Inception izleyen biriyle eşleştin!'
-                : 'Dünyanın bir ucunda seninle aynı anda Inception izleyen biriyle eşleştin!',
-            style: const TextStyle(color: Colors.white70),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('İptal', style: TextStyle(color: Colors.grey)),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                Navigator.pop(context);
-                if (!mounted) return;
-                setState(() {
-                  _isSearching = false;
-                });
-                _stopSlideshow();
-                _stopDots();
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor:
-                    _isLocalSearch ? Colors.blueAccent : Colors.redAccent,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8)),
-              ),
-              child: const Text('Sohbete Başla',
-                  style: TextStyle(color: Colors.white)),
-            ),
-          ],
-        ),
-      );
+  Future<void> _cancelSearch() async {
+    setState(() {
+      _isSearching = false;
+      _searchRequestId++; // Break the loop
     });
+    _stopDots();
+
+    if (_watchingTmdbId > 0) {
+      await ApiService.cancelMatch(_watchingTmdbId);
+    }
   }
 
   Widget _buildBackground() {
-    final hasSlideshow =
-        _isSearching && _slideshowActive && _slideshowPosters.isNotEmpty;
+    final hasSlideshow = _slideshowActive && _slideshowPosters.isNotEmpty;
 
     if (hasSlideshow) {
       final currentPosterPath = _slideshowPosters[_slideIndex];
@@ -645,225 +523,477 @@ class _MatchScreenState extends State<MatchScreen>
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
                 colors: [
-                  Colors.black.withOpacity(0.72),
-                  Colors.black.withOpacity(0.86),
+                  Colors.black.withValues(alpha: 0.72),
+                  Colors.black.withValues(alpha: 0.86),
                 ],
               ),
             ),
           ),
           SafeArea(
-            child: Column(
+            child: Stack(
               children: [
-                const SizedBox(height: 8),
-                _buildUserSearchSection(),
-                const SizedBox(height: 16),
-                const Text(
-                  'Birlikte İzle',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 28,
-                    fontWeight: FontWeight.bold,
-                    shadows: [
-                      Shadow(
-                        color: Colors.black54,
-                        blurRadius: 8,
-                        offset: Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.16),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: Colors.white12),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.people_alt_outlined,
-                          color: Colors.greenAccent, size: 20),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Şu an $_queueCount kişi eşleşme bekliyor',
-                        style: const TextStyle(
-                          color: Colors.white70,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 16),
-                if (_isWatching &&
-                    _watchingMovieName.isNotEmpty &&
-                    !_isSearching)
-                  Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 24),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 12),
-                    decoration: BoxDecoration(
-                      color: Colors.redAccent.withOpacity(0.14),
-                      borderRadius: BorderRadius.circular(16),
-                      border:
-                          Border.all(color: Colors.redAccent.withOpacity(0.45)),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.play_circle_fill,
-                            color: Colors.redAccent, size: 18),
-                        const SizedBox(width: 10),
-                        Flexible(
-                          child: Text(
-                            _watchingFor.isNotEmpty
-                                ? 'Aktif Durum: $_watchingMovieName izliyorsun · $_watchingFor'
-                                : 'Aktif Durum: $_watchingMovieName izliyorsun',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w700,
-                            ),
-                            overflow: TextOverflow.ellipsis,
+                // ── Ana içerik (arama kutusu + sayfa) ──────────────
+                Column(
+                  children: [
+                    const SizedBox(height: 8),
+                    // Sadece arama kutusu (sonuçlar overlay olarak aşağıda)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
+                      child: TextField(
+                        controller: _userSearchController,
+                        onChanged: _onUserSearchChanged,
+                        style: const TextStyle(color: Colors.white),
+                        decoration: InputDecoration(
+                          hintText: 'Kullanıcı adı ile ara...',
+                          hintStyle: const TextStyle(color: Colors.white54),
+                          prefixIcon:
+                              const Icon(Icons.search, color: Colors.white70),
+                          // Input doluysa çarpı (temizle) ikonu göster
+                          suffixIcon: _userSearchController.text.isNotEmpty
+                              ? GestureDetector(
+                                  onTap: () {
+                                    _userSearchController.clear();
+                                    setState(() {
+                                      _isUserSearching = false;
+                                      _userSearchResults = [];
+                                    });
+                                  },
+                                  child: const Icon(Icons.close,
+                                      color: Colors.white54, size: 18),
+                                )
+                              : null,
+                          filled: true,
+                          fillColor: Colors.white.withValues(alpha: 0.10),
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 12),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(14),
+                            borderSide: BorderSide.none,
                           ),
                         ),
-                      ],
+                      ),
                     ),
-                  ),
-                Expanded(
-                  child: GestureDetector(
-                    onHorizontalDragEnd: (details) {
-                      if (_isSearching || _isPreparingAssets) return;
-                      if (details.primaryVelocity! < -300) {
-                        setState(() => _isLocalSearch = true);
-                      } else if (details.primaryVelocity! > 300) {
-                        setState(() => _isLocalSearch = false);
-                      }
-                    },
-                    child: Container(
-                      color: Colors.transparent,
-                      child: Center(
-                        child: SizedBox(
-                          height: 300,
-                          width: 300,
-                          child: Stack(
-                            clipBehavior: Clip.none,
-                            children: [
-                              if (_isSearching)
-                                Positioned(
-                                  left: 65,
-                                  top: 65,
-                                  child: AnimatedBuilder(
-                                    animation: _pulseController,
-                                    builder: (context, child) {
-                                      final scale =
-                                          1.0 + (_pulseController.value * 0.15);
-                                      return Transform.scale(
-                                        scale: scale,
-                                        child: Container(
-                                          width: 170,
-                                          height: 170,
-                                          decoration: BoxDecoration(
-                                            shape: BoxShape.circle,
-                                            border: Border.all(
-                                              color: (_isLocalSearch
-                                                      ? Colors.blueAccent
-                                                      : Colors.redAccent)
-                                                  .withOpacity(1 -
-                                                      _pulseController.value),
-                                              width: 3,
+                    const SizedBox(height: 16),
+                    const Text(
+                      'Birlikte İzle',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 28,
+                        fontWeight: FontWeight.bold,
+                        shadows: [
+                          Shadow(
+                            color: Colors.black54,
+                            blurRadius: 8,
+                            offset: Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.16),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: Colors.white12),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.people_alt_outlined,
+                              color: Colors.greenAccent, size: 20),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Şu an $_queueCount kişi eşleşmeyi bekliyor',
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    Expanded(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.start,
+                        children: [
+                          GestureDetector(
+                            onHorizontalDragEnd: (details) {
+                              if (_isSearching || _isPreparingAssets) return;
+                              if (details.primaryVelocity! < -300) {
+                                setState(() => _isLocalSearch = true);
+                              } else if (details.primaryVelocity! > 300) {
+                                setState(() => _isLocalSearch = false);
+                              }
+                            },
+                            child: Container(
+                              color: Colors.transparent,
+                              height: 320,
+                              child: Align(
+                                alignment: Alignment.topCenter,
+                                child: Padding(
+                                  padding: const EdgeInsets.only(top: 8),
+                                  child: SizedBox(
+                                    height: 300,
+                                    width: 300,
+                                    child: Stack(
+                                      clipBehavior: Clip.none,
+                                      children: [
+                                        if (_isSearching)
+                                          Positioned(
+                                            left: 65,
+                                            top: 65,
+                                            child: AnimatedBuilder(
+                                              animation: _pulseController,
+                                              builder: (context, child) {
+                                                final scale = 1.0 +
+                                                    (_pulseController.value *
+                                                        0.15);
+                                                return Transform.scale(
+                                                  scale: scale,
+                                                  child: Container(
+                                                    width: 170,
+                                                    height: 170,
+                                                    decoration: BoxDecoration(
+                                                      shape: BoxShape.circle,
+                                                      border: Border.all(
+                                                        color: (_isLocalSearch
+                                                                ? Colors
+                                                                    .blueAccent
+                                                                : Colors
+                                                                    .redAccent)
+                                                            .withValues(
+                                                                alpha: 1 -
+                                                                    _pulseController
+                                                                        .value),
+                                                        width: 3,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                );
+                                              },
                                             ),
                                           ),
+                                        if (_isLocalSearch) ...[
+                                          _buildGenelCircle(),
+                                          _buildSehirCircle(),
+                                        ] else ...[
+                                          _buildSehirCircle(),
+                                          _buildGenelCircle(),
+                                        ],
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (_isSearching && _watchingMovieName.isNotEmpty)
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 24),
+                                  child: Text(
+                                    '$_watchingMovieName filmi için eşleşme aranıyor ${'.' * _dotCount}',
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                              if (_isSearching && _watchingMovieName.isNotEmpty)
+                                const SizedBox(height: 10),
+                              if (!_isWatching && !_isSearching)
+                                const Padding(
+                                  padding: EdgeInsets.symmetric(horizontal: 24),
+                                  child: Text(
+                                    'Eşleşme aramak için lütfen izlemekte olduğunuz bir filmi seçiniz.',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      color: Colors.white70,
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ),
+                              if (!_isWatching && !_isSearching)
+                                const SizedBox(height: 10),
+                              if (_isWatching &&
+                                  _watchingMovieName.isNotEmpty &&
+                                  !_isSearching)
+                                Container(
+                                  margin: const EdgeInsets.symmetric(
+                                      horizontal: 24, vertical: 8),
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 16, vertical: 12),
+                                  decoration: BoxDecoration(
+                                    color: Colors.redAccent
+                                        .withValues(alpha: 0.14),
+                                    borderRadius: BorderRadius.circular(16),
+                                    border: Border.all(
+                                        color: Colors.redAccent
+                                            .withValues(alpha: 0.45)),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(Icons.play_circle_fill,
+                                          color: Colors.redAccent, size: 18),
+                                      const SizedBox(width: 10),
+                                      Flexible(
+                                        child: Text(
+                                          _watchingFor.isNotEmpty
+                                              ? 'Aktif Durum: $_watchingMovieName izliyorsun · $_watchingFor'
+                                              : 'Aktif Durum: $_watchingMovieName izliyorsun',
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                          overflow: TextOverflow.ellipsis,
                                         ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              Padding(
+                                padding: const EdgeInsets.all(32.0),
+                                child: SizedBox(
+                                  width: double.infinity,
+                                  height: 60,
+                                  child: ElevatedButton(
+                                    onPressed: (!_isWatching && !_isSearching)
+                                        ? null
+                                        : _isSearching
+                                            ? _cancelSearch
+                                            : _startSearch,
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor:
+                                          (!_isWatching && !_isSearching)
+                                              ? Colors.grey[850]
+                                              : _isSearching
+                                                  ? Colors.grey[800]
+                                                  : (_isLocalSearch
+                                                      ? Colors.blueAccent
+                                                      : Colors.redAccent),
+                                      shadowColor: _isSearching ||
+                                              (!_isWatching && !_isSearching)
+                                          ? Colors.transparent
+                                          : (_isLocalSearch
+                                              ? Colors.blueAccent
+                                              : Colors.redAccent),
+                                      elevation: _isSearching ||
+                                              (!_isWatching && !_isSearching)
+                                          ? 0
+                                          : 8,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(16),
+                                      ),
+                                    ),
+                                    child: _isSearching
+                                        ? const Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.center,
+                                            children: [
+                                              Icon(Icons.close,
+                                                  color: Colors.white),
+                                              SizedBox(width: 12),
+                                              Text(
+                                                'Aramayı İptal Et',
+                                                style: TextStyle(
+                                                  fontSize: 18,
+                                                  fontWeight: FontWeight.bold,
+                                                  color: Colors.white,
+                                                ),
+                                              ),
+                                            ],
+                                          )
+                                        : Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.center,
+                                            children: [
+                                              Icon(
+                                                  _isLocalSearch
+                                                      ? Icons.my_location
+                                                      : Icons.search,
+                                                  color: (!_isWatching)
+                                                      ? Colors.white54
+                                                      : Colors.white),
+                                              const SizedBox(width: 12),
+                                              Text(
+                                                _isLocalSearch
+                                                    ? 'Şehrimde Eşleşme Ara'
+                                                    : 'Genel Eşleşme Ara',
+                                                style: TextStyle(
+                                                  fontSize: 18,
+                                                  fontWeight: FontWeight.bold,
+                                                  color: (!_isWatching)
+                                                      ? Colors.white54
+                                                      : Colors.white,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                // Arama Sonuclari Overlay (sayfa icerigini itmez)
+                if (_userSearchController.text.trim().length >= 2)
+                  Positioned(
+                    top: 76, // arama kutusu yüksekliği kadar aşağıda başla
+                    left: 16,
+                    right: 16,
+                    child: Material(
+                      color: Colors.transparent,
+                      child: Container(
+                        constraints: const BoxConstraints(maxHeight: 220),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1A1A1A),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.white12),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.5),
+                              blurRadius: 16,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        child: _isUserSearching
+                            ? const Center(
+                                child: Padding(
+                                  padding: EdgeInsets.all(16),
+                                  child: SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2.4,
+                                      color: Colors.white70,
+                                    ),
+                                  ),
+                                ),
+                              )
+                            : _userSearchResults.isEmpty
+                                ? const Padding(
+                                    padding: EdgeInsets.all(14),
+                                    child: Text(
+                                      'Kullanıcı bulunamadı',
+                                      style: TextStyle(color: Colors.white70),
+                                    ),
+                                  )
+                                : ListView.separated(
+                                    shrinkWrap: true,
+                                    itemCount: _userSearchResults.length,
+                                    separatorBuilder: (_, __) => Divider(
+                                        color: Colors.white
+                                            .withValues(alpha: 0.08)),
+                                    itemBuilder: (context, index) {
+                                      final user = _userSearchResults[index];
+                                      final username =
+                                          (user['username'] ?? '').toString();
+                                      final city =
+                                          (user['city'] ?? '').toString();
+                                      final userId =
+                                          (user['userId'] ?? user['_id'] ?? '')
+                                              .toString();
+                                      final avatarRaw = (user['avatarUrl'] ??
+                                              user['avatar_url'] ??
+                                              '')
+                                          .toString()
+                                          .trim();
+                                      final avatarUrl = avatarRaw.isEmpty
+                                          ? ''
+                                          : (avatarRaw.startsWith('http://') ||
+                                                  avatarRaw
+                                                      .startsWith('https://')
+                                              ? avatarRaw
+                                              : (avatarRaw.startsWith('/')
+                                                  ? '${ApiService.baseUrl}$avatarRaw'
+                                                  : '${ApiService.baseUrl}/$avatarRaw'));
+                                      final hasAvatar = avatarUrl.isNotEmpty;
+
+                                      return ListTile(
+                                        dense: true,
+                                        leading: CircleAvatar(
+                                          backgroundColor:
+                                              const Color(0xFF2A2A2A),
+                                          child: hasAvatar
+                                              ? ClipOval(
+                                                  child: CachedNetworkImage(
+                                                    imageUrl: avatarUrl,
+                                                    width: 40,
+                                                    height: 40,
+                                                    fit: BoxFit.cover,
+                                                    errorWidget: (_, __, ___) =>
+                                                        const Icon(
+                                                      Icons.person,
+                                                      color: Colors.white54,
+                                                      size: 22,
+                                                    ),
+                                                    placeholder: (_, __) =>
+                                                        const Icon(
+                                                      Icons.person,
+                                                      color: Colors.white54,
+                                                      size: 22,
+                                                    ),
+                                                  ),
+                                                )
+                                              : const Icon(
+                                                  Icons.person,
+                                                  color: Colors.white54,
+                                                  size: 22,
+                                                ),
+                                        ),
+                                        title: Text(username,
+                                            style: const TextStyle(
+                                                color: Colors.white)),
+                                        subtitle: Text(
+                                          city.isNotEmpty
+                                              ? city
+                                              : 'Şehir bilgisi yok',
+                                          style: const TextStyle(
+                                              color: Colors.white54),
+                                        ),
+                                        onTap: userId.isEmpty
+                                            ? null
+                                            : () {
+                                                setState(() {
+                                                  _userSearchResults.clear();
+                                                  // isUserSearching = false;  // Zaten bitmiş olmalı
+                                                  // Aramayı sıfırlayabilirsiniz
+                                                });
+                                                Navigator.push(
+                                                  context,
+                                                  MaterialPageRoute(
+                                                    builder: (_) =>
+                                                        UserDetailScreen(
+                                                      userId: userId,
+                                                      isMe:
+                                                          false, // Başkasının profili
+                                                    ),
+                                                  ),
+                                                );
+                                              },
                                       );
                                     },
                                   ),
-                                ),
-                              if (_isLocalSearch) ...[
-                                _buildGenelCircle(),
-                                _buildSehirCircle(),
-                              ] else ...[
-                                _buildSehirCircle(),
-                                _buildGenelCircle(),
-                              ],
-                            ],
-                          ),
-                        ),
                       ),
                     ),
                   ),
-                ),
-                if (_isSearching && _watchingMovieName.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24),
-                    child: Text(
-                      '$_watchingMovieName filmi için eşleşme aranıyor ${'.' * _dotCount}',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                if (_isSearching && _watchingMovieName.isNotEmpty)
-                  const SizedBox(height: 10),
-                Padding(
-                  padding: const EdgeInsets.all(32.0),
-                  child: SizedBox(
-                    width: double.infinity,
-                    height: 60,
-                    child: ElevatedButton(
-                      onPressed: (_isSearching || _isPreparingAssets)
-                          ? null
-                          : _startSearch,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _isLocalSearch
-                            ? Colors.blueAccent
-                            : Colors.redAccent,
-                        shadowColor: _isLocalSearch
-                            ? Colors.blueAccent
-                            : Colors.redAccent,
-                        elevation: (_isSearching || _isPreparingAssets) ? 0 : 8,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                      ),
-                      child: (_isSearching || _isPreparingAssets)
-                          ? const SizedBox(
-                              height: 24,
-                              width: 24,
-                              child: CircularProgressIndicator(
-                                  color: Colors.white, strokeWidth: 3),
-                            )
-                          : Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(
-                                    _isLocalSearch
-                                        ? Icons.my_location
-                                        : Icons.search,
-                                    color: Colors.white),
-                                const SizedBox(width: 12),
-                                Text(
-                                  _isLocalSearch
-                                      ? 'Şehrimde Eşleşme Ara'
-                                      : 'Genel Eşleşme Ara',
-                                  style: const TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                              ],
-                            ),
-                    ),
-                  ),
-                ),
               ],
             ),
           ),
@@ -908,7 +1038,7 @@ class _MatchScreenState extends State<MatchScreen>
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     color: isActive
-                        ? Colors.redAccent.withOpacity(0.2)
+                        ? Colors.redAccent.withValues(alpha: 0.2)
                         : const Color(0xFF1E1E1E),
                     border: Border.all(
                       color: isActive ? Colors.redAccent : Colors.white24,
@@ -917,7 +1047,7 @@ class _MatchScreenState extends State<MatchScreen>
                     boxShadow: isActive
                         ? [
                             BoxShadow(
-                              color: Colors.redAccent.withOpacity(0.4),
+                              color: Colors.redAccent.withValues(alpha: 0.4),
                               blurRadius: 25,
                               spreadRadius: 5,
                             )
@@ -985,7 +1115,7 @@ class _MatchScreenState extends State<MatchScreen>
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     color: isActive
-                        ? Colors.blueAccent.withOpacity(0.2)
+                        ? Colors.blueAccent.withValues(alpha: 0.2)
                         : const Color(0xFF1E1E1E),
                     border: Border.all(
                       color: isActive ? Colors.blueAccent : Colors.white24,
@@ -994,7 +1124,7 @@ class _MatchScreenState extends State<MatchScreen>
                     boxShadow: isActive
                         ? [
                             BoxShadow(
-                              color: Colors.blueAccent.withOpacity(0.4),
+                              color: Colors.blueAccent.withValues(alpha: 0.4),
                               blurRadius: 25,
                               spreadRadius: 5,
                             )
@@ -1009,7 +1139,7 @@ class _MatchScreenState extends State<MatchScreen>
                             color: isActive ? Colors.white : Colors.white70,
                             size: isActive ? 54 : 28),
                         SizedBox(height: isActive ? 8 : 4),
-                        Text('Şehrimde',
+                        Text(_userCity.isNotEmpty ? _userCity : 'Şehrimde',
                             style: TextStyle(
                                 color: isActive ? Colors.white : Colors.white70,
                                 fontSize: isActive ? 18 : 12,
@@ -1022,6 +1152,551 @@ class _MatchScreenState extends State<MatchScreen>
             },
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ─── EŞLEŞME KABUL/RED OVERLAY ─────────────────────────────────────────────
+
+class MatchFoundOverlay extends StatefulWidget {
+  final String otherUserName;
+  final String targetUserId;
+  final String myUserId;
+  final String roomId;
+  final String movieName;
+  final String? posterUrl;
+
+  const MatchFoundOverlay({
+    super.key,
+    required this.otherUserName,
+    required this.targetUserId,
+    required this.myUserId,
+    required this.roomId,
+    required this.movieName,
+    this.posterUrl,
+  });
+
+  @override
+  State<MatchFoundOverlay> createState() => _MatchFoundOverlayState();
+}
+
+class _MatchFoundOverlayState extends State<MatchFoundOverlay>
+    with TickerProviderStateMixin {
+  // ── Animasyonlar ───────────────────────────────────────────
+  late AnimationController _entranceController;
+  late Animation<double> _fadeIn;
+  late Animation<double> _slideUp;
+
+  // ── Countdown ──────────────────────────────────────────────
+  static const int _totalSeconds = 5;
+  double _progress = 1.0; // 1.0 → 0.0
+  Timer? _countdownTimer;
+  int _remaining = _totalSeconds;
+
+  // ── Kabul durumu ────────────────────────────────────────────
+  bool _accepted = false;
+  bool _isNavigating = false;
+  Timer? _pollTimer;
+
+  // ── Profil fotoğrafları ─────────────────────────────────────
+  String? _myAvatarUrl;
+  String? _otherAvatarUrl;
+
+  @override
+  void initState() {
+    super.initState();
+
+    // Giriş animasyonları
+    _entranceController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
+    );
+    _fadeIn =
+        CurvedAnimation(parent: _entranceController, curve: Curves.easeOut);
+    _slideUp = Tween<double>(begin: 60, end: 0).animate(
+      CurvedAnimation(parent: _entranceController, curve: Curves.easeOutCubic),
+    );
+    _entranceController.forward();
+
+    _startCountdown();
+    _loadAvatars();
+  }
+
+  Future<void> _loadAvatars() async {
+    final myProfile = await ApiService.getProfile();
+    final otherProfile = await ApiService.getUserProfile(widget.targetUserId);
+    if (!mounted) return;
+    setState(() {
+      _myAvatarUrl = _resolveAvatarUrl(myProfile?['avatarUrl']);
+      _otherAvatarUrl = _resolveAvatarUrl(otherProfile?['avatarUrl']);
+    });
+  }
+
+  String? _resolveAvatarUrl(dynamic raw) {
+    final s = (raw ?? '').toString().trim();
+    if (s.isEmpty) return null;
+    if (s.startsWith('http')) return s;
+    return '${ApiService.baseUrl}$s';
+  }
+
+  void _startCountdown() {
+    _countdownTimer = Timer.periodic(const Duration(milliseconds: 50), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      final elapsed = (_totalSeconds * 1000 - timer.tick * 50)
+          .clamp(0, _totalSeconds * 1000);
+      setState(() {
+        _progress = elapsed / (_totalSeconds * 1000);
+        _remaining = (elapsed / 1000).ceil();
+      });
+      if (elapsed <= 0) {
+        timer.cancel();
+        _pollTimer?.cancel();
+        // Süre bitti → kabul etmiş olsak bile modal kapansın, aramaya devam
+        if (mounted) {
+          Navigator.of(context).pop(false);
+        }
+      }
+    });
+  }
+
+  void _startPolling() {
+    _pollTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
+      if (!mounted || _isNavigating) return;
+      final status = await ApiService.getMatchAcceptStatus(widget.roomId);
+      if (!mounted) return;
+
+      if (status != null && status['bothAccepted'] == true) {
+        // İkisi de kabul etti → sohbete geç
+        final finalRoomId = (status['roomId'] ?? widget.roomId).toString();
+        _pollTimer?.cancel();
+        _countdownTimer?.cancel();
+        _navigateToChat(finalRoomId);
+      } else if (status != null && status['rejected'] == true) {
+        // Karşı taraf reddetti → modal kapansın, aramaya devam
+        _pollTimer?.cancel();
+        _countdownTimer?.cancel();
+        if (mounted) {
+          Navigator.of(context).pop(false);
+        }
+      }
+    });
+  }
+
+  Future<void> _accept() async {
+    if (_accepted || _isNavigating) return;
+    setState(() => _accepted = true);
+    // Countdown timer'ı DURDURMUYORUZ — süre devam ediyor
+
+    final result = await ApiService.acceptMatch(
+      roomId: widget.roomId,
+      targetUserId: widget.targetUserId,
+    );
+
+    if (!mounted) return;
+
+    if (result != null && result['bothAccepted'] == true) {
+      final finalRoomId = (result['roomId'] ?? widget.roomId).toString();
+      _countdownTimer?.cancel();
+      _navigateToChat(finalRoomId);
+    } else {
+      // Karşı taraf henüz kabul etmedi → poll yap (süre devam ediyor)
+      _startPolling();
+    }
+  }
+
+  Future<void> _reject() async {
+    if (_isNavigating) return;
+    _pollTimer?.cancel();
+    _countdownTimer?.cancel();
+
+    // Arkada Redis match cache'i temizle, böylece aynı kişiyle anında tekrar eşleşmeyiz
+    await ApiService.rejectMatch(
+      roomId: widget.roomId,
+      targetUserId: widget.targetUserId,
+    );
+
+    if (mounted) {
+      // false döndürerek MatchScreen'in arama döngüsüne tekrar girmesini sağla
+      Navigator.of(context).pop(false);
+    }
+  }
+
+  void _navigateToChat(String finalRoomId) {
+    if (_isNavigating || !mounted) return;
+    setState(() => _isNavigating = true);
+    _pollTimer?.cancel();
+    _countdownTimer?.cancel();
+
+    // true döndürerek MatchScreen'de arama döngüsünü tamamen kapatmasını sağla
+    Navigator.of(context).pop(true);
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ChatDetailScreen(
+          username: widget.otherUserName,
+          avatarSeed: widget.targetUserId,
+          avatarUrl: _otherAvatarUrl,
+          isOnline: true,
+          movieTitle: widget.movieName,
+          moviePoster: widget.posterUrl,
+          targetUserId: widget.targetUserId,
+          roomId: finalRoomId,
+        ),
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _entranceController.dispose();
+    _countdownTimer?.cancel();
+    _pollTimer?.cancel();
+    super.dispose();
+  }
+
+  Widget _avatarWidget(String? url, String fallbackSeed, double size) {
+    if (url != null && url.isNotEmpty) {
+      return ClipOval(
+        child: CachedNetworkImage(
+          imageUrl: url,
+          width: size,
+          height: size,
+          fit: BoxFit.cover,
+          errorWidget: (_, __, ___) => _dicebearAvatar(fallbackSeed, size),
+          placeholder: (_, __) => _dicebearAvatar(fallbackSeed, size),
+        ),
+      );
+    }
+    return _dicebearAvatar(fallbackSeed, size);
+  }
+
+  Widget _dicebearAvatar(String seed, double size) {
+    return ClipOval(
+      child: Image.network(
+        'https://api.dicebear.com/7.x/avataaars/png?seed=$seed',
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => Container(
+          width: size,
+          height: size,
+          color: const Color(0xFF2A2A2A),
+          child: const Icon(Icons.person, color: Colors.white38),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          // ── Karanlık arka plan (blur effect) ─────────────────
+          GestureDetector(
+            onTap: () {}, // Taps through disabled
+            child: Container(
+              color: Colors.black.withValues(alpha: 0.85),
+            ),
+          ),
+
+          // ── Film afişi soluk arka plan ─────────────────────────
+          if (widget.posterUrl != null && widget.posterUrl!.isNotEmpty)
+            Positioned.fill(
+              child: Opacity(
+                opacity: 0.12,
+                child: CachedNetworkImage(
+                  imageUrl: widget.posterUrl!,
+                  fit: BoxFit.cover,
+                  errorWidget: (_, __, ___) => const SizedBox.shrink(),
+                ),
+              ),
+            ),
+
+          // ── İçerik ─────────────────────────────────────────────
+          SafeArea(
+            child: FadeTransition(
+              opacity: _fadeIn,
+              child: AnimatedBuilder(
+                animation: _slideUp,
+                builder: (context, child) => Transform.translate(
+                  offset: Offset(0, _slideUp.value),
+                  child: child,
+                ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    // ── Başlık ──────────────────────────────────
+                    const Text(
+                      '🎉 Eşleşme Bulundu!',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 26,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      '${widget.movieName} izlerken eşleştin',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.55),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 42),
+
+                    // ── İki kullanıcı avatarı + VS ───────────────
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        // Ben
+                        Column(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(3),
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                gradient: const LinearGradient(
+                                  colors: [
+                                    Color(0xFFE53935),
+                                    Color(0xFFFF6F60)
+                                  ],
+                                ),
+                              ),
+                              child: _avatarWidget(
+                                  _myAvatarUrl, widget.myUserId, 80),
+                            ),
+                            const SizedBox(height: 10),
+                            const Text(
+                              'Sen',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ],
+                        ),
+
+                        // VS ayırıcı
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 24),
+                          child: Column(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.08),
+                                  borderRadius: BorderRadius.circular(20),
+                                  border: Border.all(color: Colors.white12),
+                                ),
+                                child: const Text(
+                                  '❤️',
+                                  style: TextStyle(fontSize: 24),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+
+                        // Karşı taraf
+                        Column(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(3),
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                gradient: const LinearGradient(
+                                  colors: [
+                                    Color(0xFF1565C0),
+                                    Color(0xFF42A5F5)
+                                  ],
+                                ),
+                              ),
+                              child: _avatarWidget(
+                                  _otherAvatarUrl, widget.targetUserId, 80),
+                            ),
+                            const SizedBox(height: 10),
+                            Text(
+                              widget.otherUserName,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+
+                    const SizedBox(height: 48),
+
+                    // ── Açıklama metni ───────────────────────────
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 40),
+                      child: Text(
+                        _accepted
+                            ? '${widget.otherUserName} de kabul etsin bekleniyor...'
+                            : '${widget.otherUserName} ile sohbet etmek ister misin?',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.8),
+                          fontSize: 15,
+                          height: 1.5,
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 36),
+
+                    // ── Butonlar ─────────────────────────────────
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 40),
+                      child: Row(
+                        children: [
+                          // Reddet
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: _accepted ? null : _reject,
+                              child: Container(
+                                height: 56,
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(
+                                      alpha: _accepted ? 0.03 : 0.07),
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(
+                                      color: _accepted
+                                          ? Colors.white10
+                                          : Colors.white24),
+                                ),
+                                child: Center(
+                                  child: Text(
+                                    'Reddet',
+                                    style: TextStyle(
+                                      color: _accepted
+                                          ? Colors.white30
+                                          : Colors.white70,
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 14),
+                          // Kabul Et
+                          Expanded(
+                            flex: 2,
+                            child: GestureDetector(
+                              onTap: _accepted ? null : _accept,
+                              child: Container(
+                                height: 56,
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    colors: _accepted
+                                        ? [
+                                            const Color(0xFF555555),
+                                            const Color(0xFF777777)
+                                          ]
+                                        : [
+                                            const Color(0xFFE53935),
+                                            const Color(0xFFFF6F60)
+                                          ],
+                                  ),
+                                  borderRadius: BorderRadius.circular(16),
+                                  boxShadow: _accepted
+                                      ? []
+                                      : [
+                                          BoxShadow(
+                                            color: const Color(0xFFE53935)
+                                                .withValues(alpha: 0.45),
+                                            blurRadius: 18,
+                                            offset: const Offset(0, 6),
+                                          ),
+                                        ],
+                                ),
+                                child: Center(
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        _accepted
+                                            ? Icons.check_circle
+                                            : Icons.chat_bubble_rounded,
+                                        color: Colors.white,
+                                        size: 18,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        _accepted ? 'Kabul Edildi' : 'Kabul Et',
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    const SizedBox(height: 32),
+
+                    // ── Progress bar (countdown) ──────────────────
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 40),
+                      child: Column(
+                        children: [
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: TweenAnimationBuilder<double>(
+                              tween: Tween(begin: _progress, end: _progress),
+                              duration: const Duration(milliseconds: 50),
+                              builder: (_, val, __) => LinearProgressIndicator(
+                                value: val,
+                                minHeight: 5,
+                                backgroundColor: Colors.white12,
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  Color.lerp(Colors.redAccent,
+                                      Colors.greenAccent, _progress)!,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            '$_remaining saniye',
+                            style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.4),
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

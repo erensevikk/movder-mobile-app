@@ -211,6 +211,7 @@ MovDate/
 3. WebSocket bağlantılarını doğrulama (auth) olmadan açma.
 4. Üzerinde çalışılmayan "AI Eşleşme" özelliğine kod yazma (askıda olan modül).
 5. Production ortamında `fmt.Println` kullanma; yapısal loglama (structured logging) tercih et.
+6. `git checkout`, `git reset --hard`, `git restore` gibi yerel dosyaların üzerine Git'teki versiyonu yazabilecek komutları **kullanıcıya sormadan otomatik olarak çalıştırma**. Bu tür komutları uygulamadan önce mutlaka kullanıcıya bildir ve onay al.
 
 ### ✅ YAP:
 

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- image_cropper (UCrop) alt menü çevirileri -->
+    <string name="ucrop_scale">Ölçekle</string>
+    <string name="ucrop_rotate">Döndür</string>
+</resources>

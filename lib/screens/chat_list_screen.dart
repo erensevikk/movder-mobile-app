@@ -1,61 +1,117 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+import '../services/api_service.dart';
+import '../services/global_chat_service.dart';
 import 'chat_detail_screen.dart';
 
-class ChatListScreen extends StatelessWidget {
-  const ChatListScreen({super.key});
+class ChatListScreen extends StatefulWidget {
+  final int refreshSignal;
 
-  // ── Mock Sohbet Verisi ──────────────────────────────────────
-  static final List<Map<String, dynamic>> _mockChats = [
-    {
-      'username': 'yagmur_snm',
-      'avatarSeed': 'yagmur_snm',
-      'isOnline': true,
-      'movieTitle': 'Interstellar',
-      'moviePoster':
-          'https://image.tmdb.org/t/p/w92/gEU2QniE6E77NI6lCU6MxlNBvIx.jpg',
-      'lastMessage': 'O sahne efsaneydi, Cooper geri döndüğünde ağladım 😭',
-      'time': '14:32',
-      'unreadCount': 3,
-      'messages': [
-        {
-          'text': 'Selam! Interstellar izliyor musun sen de?',
-          'isMe': false,
-          'time': '14:10'
-        },
-        {
-          'text': 'Evet! Tam kara delik sahnesindeyim 🚀',
-          'isMe': true,
-          'time': '14:12'
-        },
-        {
-          'text': 'O sahne efsane, bekle birazdan ağlayacaksın 😄',
-          'isMe': false,
-          'time': '14:15'
-        },
-        {'text': 'Haha hazırım!', 'isMe': true, 'time': '14:20'},
-        {
-          'text': 'O sahne efsaneydi, Cooper geri döndüğünde ağladım 😭',
-          'isMe': false,
-          'time': '14:32'
-        },
-      ],
-    },
-    {
-      'username': 'cinema_addict',
-      'avatarSeed': 'cinema_addict',
-      'isOnline': false,
-      'movieTitle': 'Inception',
-      'moviePoster':
-          'https://image.tmdb.org/t/p/w92/ljsZTbVsrQSqZgWeep2B1QiDKuh.jpg',
-      'lastMessage': 'Totem hâlâ dönüyor mu sence? 🤔',
-      'time': 'Dün',
-      'unreadCount': 0,
-      'messages': [],
-    },
-  ];
+  const ChatListScreen({super.key, this.refreshSignal = 0});
+
+  @override
+  State<ChatListScreen> createState() => _ChatListScreenState();
+}
+
+class _ChatListScreenState extends State<ChatListScreen> {
+  List<Map<String, dynamic>> _chats = [];
+  bool _isLoading = true;
+  StreamSubscription<String>? _messageEventsSub;
+  Timer? _refreshDebounce;
+  final Set<String> _hiddenRoomIds = <String>{};
+
+  @override
+  void initState() {
+    super.initState();
+    _loadChats();
+
+    _messageEventsSub = GlobalChatService.instance.messageEvents.listen((_) {
+      // Çok hızlı ardışık eventlerde API'yi spam etmemek için debounce
+      _refreshDebounce?.cancel();
+      _refreshDebounce = Timer(const Duration(milliseconds: 250), () {
+        _refreshChatsOnly();
+      });
+    });
+  }
+
+  Future<void> _loadChats({bool rebindGlobalWs = true}) async {
+    setState(() => _isLoading = true);
+    final rooms = await ApiService.getChatRooms();
+    if (!mounted) return;
+    setState(() {
+      _chats = _applyHiddenFilter(rooms);
+      _isLoading = false;
+    });
+
+    // Global WS bağlantılarını sadece gerektiğinde re-init et.
+    // (Her yeni mesaj eventinde re-init etmek socket churn üretir.)
+    if (rebindGlobalWs) {
+      await GlobalChatService.instance.init(rooms);
+    }
+  }
+
+  Future<void> _refreshChatsOnly() async {
+    final rooms = await ApiService.getChatRooms();
+    if (!mounted) return;
+    setState(() {
+      _chats = _applyHiddenFilter(rooms);
+      _isLoading = false;
+    });
+  }
+
+  List<Map<String, dynamic>> _applyHiddenFilter(
+      List<Map<String, dynamic>> rooms) {
+    if (_hiddenRoomIds.isEmpty) return rooms;
+    return rooms.where((room) {
+      final roomId = (room['roomId'] ?? '').toString();
+      return roomId.isNotEmpty && !_hiddenRoomIds.contains(roomId);
+    }).toList();
+  }
+
+  void _hideChatCard(String roomId) {
+    if (roomId.isEmpty) return;
+    setState(() {
+      _hiddenRoomIds.add(roomId);
+      _chats.removeWhere((c) => (c['roomId'] ?? '').toString() == roomId);
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant ChatListScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.refreshSignal != widget.refreshSignal) {
+      _loadChats(rebindGlobalWs: true);
+    }
+  }
+
+  @override
+  void dispose() {
+    _refreshDebounce?.cancel();
+    _messageEventsSub?.cancel();
+    super.dispose();
+  }
+
+  String _formatTime(int? timestamp) {
+    if (timestamp == null || timestamp == 0) return '';
+    final date = DateTime.fromMillisecondsSinceEpoch(timestamp * 1000);
+    final now = DateTime.now();
+    final isToday =
+        now.year == date.year && now.month == date.month && now.day == date.day;
+    if (isToday) {
+      return DateFormat('HH:mm').format(date);
+    }
+    return DateFormat('dd.MM.yyyy').format(date);
+  }
 
   @override
   Widget build(BuildContext context) {
+    int totalUnread = 0;
+    for (var c in _chats) {
+      totalUnread += (c['unreadCount'] as int? ?? 0);
+    }
+
     return Scaffold(
       backgroundColor: const Color(0xFF0F0F0F),
       body: SafeArea(
@@ -113,101 +169,153 @@ class ChatListScreen extends StatelessWidget {
             ),
 
             // ── Aktif Eşleşme Özet Bandı ─────────────────────
-            Container(
-              margin: const EdgeInsets.symmetric(horizontal: 20),
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [
-                    Colors.redAccent.withOpacity(0.12),
-                    Colors.redAccent.withOpacity(0.04),
-                  ],
+            if (!_isLoading && _chats.isNotEmpty)
+              Container(
+                margin: const EdgeInsets.symmetric(horizontal: 20),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      Colors.redAccent.withValues(alpha: 0.12),
+                      Colors.redAccent.withValues(alpha: 0.04),
+                    ],
+                  ),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                      color: Colors.redAccent.withValues(alpha: 0.25)),
                 ),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.redAccent.withOpacity(0.25)),
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    width: 8,
-                    height: 8,
-                    decoration: const BoxDecoration(
-                      color: Colors.greenAccent,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  const Text(
-                    '2 aktif sohbet',
-                    style: TextStyle(
-                      color: Colors.white70,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const Spacer(),
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: Colors.redAccent.withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const Text(
-                      '3 okunmamış',
-                      style: TextStyle(
-                        color: Colors.redAccent,
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
+                child: Row(
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: const BoxDecoration(
+                        color: Colors.greenAccent,
+                        shape: BoxShape.circle,
                       ),
                     ),
-                  ),
-                ],
+                    const SizedBox(width: 10),
+                    Text(
+                      '${_chats.length} aktif sohbet',
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const Spacer(),
+                    if (totalUnread > 0)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.redAccent.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          '$totalUnread okunmamış',
+                          style: const TextStyle(
+                            color: Colors.redAccent,
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
               ),
-            ),
 
             const SizedBox(height: 16),
 
             // ── Sohbet Listesi ────────────────────────────────
             Expanded(
-              child: ListView.separated(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                itemCount: _mockChats.length,
-                separatorBuilder: (_, __) => Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 4),
-                  child: Divider(
-                    color: Colors.white.withOpacity(0.06),
-                    height: 1,
-                  ),
-                ),
-                itemBuilder: (context, index) {
-                  final chat = _mockChats[index];
-                  return _ChatCard(
-                    username: chat['username'] as String,
-                    avatarSeed: chat['avatarSeed'] as String,
-                    isOnline: chat['isOnline'] as bool,
-                    movieTitle: chat['movieTitle'] as String,
-                    moviePoster: chat['moviePoster'] as String,
-                    lastMessage: chat['lastMessage'] as String,
-                    time: chat['time'] as String,
-                    unreadCount: chat['unreadCount'] as int,
-                    onTap: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => ChatDetailScreen(
-                            username: chat['username'] as String,
-                            avatarSeed: chat['avatarSeed'] as String,
-                            isOnline: chat['isOnline'] as bool,
-                            movieTitle: chat['movieTitle'] as String,
-                            initialMessages: (chat['messages'] as List<dynamic>)
-                                .cast<Map<String, dynamic>>(),
+              child: _isLoading
+                  ? const Center(
+                      child: CircularProgressIndicator(color: Colors.redAccent))
+                  : _chats.isEmpty
+                      ? const Center(
+                          child: Text(
+                            'Henüz hiç eşleşmen veya sohbetin yok.',
+                            style: TextStyle(color: Colors.white54),
                           ),
+                        )
+                      : ListView.separated(
+                          padding: const EdgeInsets.symmetric(horizontal: 20),
+                          itemCount: _chats.length,
+                          separatorBuilder: (_, __) => Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            child: Divider(
+                              color: Colors.white.withValues(alpha: 0.06),
+                              height: 1,
+                            ),
+                          ),
+                          itemBuilder: (context, index) {
+                            final chat = _chats[index];
+                            final avatarRaw =
+                                (chat['avatarUrl'] ?? '').toString().trim();
+                            final avatarUrl = avatarRaw.isEmpty
+                                ? ''
+                                : (avatarRaw.startsWith('http://') ||
+                                        avatarRaw.startsWith('https://')
+                                    ? avatarRaw
+                                    : (avatarRaw.startsWith('/')
+                                        ? '${ApiService.baseUrl}$avatarRaw'
+                                        : '${ApiService.baseUrl}/$avatarRaw'));
+
+                            final roomId = (chat['roomId'] ?? '').toString();
+
+                            return _SwipeToDeleteChatItem(
+                              key: ValueKey('chat-swipe-$roomId-$index'),
+                              onDelete: () => _hideChatCard(roomId),
+                              child: _ChatCard(
+                                username: chat['username']?.toString() ??
+                                    'Bilinmeyen',
+                                avatarUrl: avatarUrl,
+                                isOnline:
+                                    true, // TODO: Redis ile online state eklenecek
+                                movieTitle: chat['movieTitle']?.toString() ??
+                                    'Bilinmeyen Film',
+                                moviePoster:
+                                    chat['moviePoster']?.toString() ?? '',
+                                lastMessage: chat['lastMessage']?.toString() ??
+                                    'Sohbete başla...',
+                                time:
+                                    _formatTime(chat['lastTimestamp'] as int?),
+                                unreadCount: (chat['unreadCount'] as int?) ?? 0,
+                                onTap: () {
+                                  Navigator.of(context)
+                                      .push(
+                                    MaterialPageRoute(
+                                      builder: (_) => ChatDetailScreen(
+                                        targetUserId:
+                                            chat['targetUserId']?.toString(),
+                                        roomId: chat['roomId']?.toString(),
+                                        username:
+                                            chat['username']?.toString() ?? '',
+                                        avatarSeed:
+                                            chat['avatarSeed']?.toString() ??
+                                                '',
+                                        avatarUrl: avatarUrl,
+                                        isOnline: true,
+                                        movieTitle:
+                                            chat['movieTitle']?.toString() ??
+                                                '',
+                                        moviePoster:
+                                            chat['moviePoster']?.toString(),
+                                        initialMessages: const [], // Geçmiş içeride çekilecek
+                                      ),
+                                    ),
+                                  )
+                                      .then((_) {
+                                    // Geri dönünce listeyi tazele ki okundu bilgileri sıfırlansın
+                                    _loadChats();
+                                  });
+                                },
+                              ),
+                            );
+                          },
                         ),
-                      );
-                    },
-                  );
-                },
-              ),
             ),
           ],
         ),
@@ -219,7 +327,7 @@ class ChatListScreen extends StatelessWidget {
 // ── Sohbet Kartı Bileşeni ─────────────────────────────────────
 class _ChatCard extends StatelessWidget {
   final String username;
-  final String avatarSeed;
+  final String avatarUrl;
   final bool isOnline;
   final String movieTitle;
   final String moviePoster;
@@ -230,7 +338,7 @@ class _ChatCard extends StatelessWidget {
 
   const _ChatCard({
     required this.username,
-    required this.avatarSeed,
+    required this.avatarUrl,
     required this.isOnline,
     required this.movieTitle,
     required this.moviePoster,
@@ -254,8 +362,8 @@ class _ChatCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
             color: hasUnread
-                ? Colors.redAccent.withOpacity(0.2)
-                : Colors.white.withOpacity(0.06),
+                ? Colors.redAccent.withValues(alpha: 0.2)
+                : Colors.white.withValues(alpha: 0.06),
           ),
         ),
         child: Row(
@@ -270,16 +378,28 @@ class _ChatCard extends StatelessWidget {
                     shape: BoxShape.circle,
                     border: Border.all(
                       color: hasUnread
-                          ? Colors.redAccent.withOpacity(0.5)
+                          ? Colors.redAccent.withValues(alpha: 0.5)
                           : Colors.white24,
                       width: 2,
                     ),
-                    image: DecorationImage(
-                      image: NetworkImage(
-                        'https://api.dicebear.com/7.x/avataaars/png?seed=$avatarSeed',
-                      ),
-                      fit: BoxFit.cover,
-                    ),
+                    color: const Color(0xFF1E1E1E),
+                  ),
+                  child: ClipOval(
+                    child: avatarUrl.isNotEmpty
+                        ? Image.network(
+                            avatarUrl,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) => const Icon(
+                              Icons.person,
+                              color: Colors.white54,
+                              size: 22,
+                            ),
+                          )
+                        : const Icon(
+                            Icons.person,
+                            color: Colors.white54,
+                            size: 22,
+                          ),
                   ),
                 ),
                 if (isOnline)
@@ -336,43 +456,37 @@ class _ChatCard extends StatelessWidget {
 
                   const SizedBox(height: 4),
 
-                  // Eşleşme Film Etiketi
+                  // Eşleşme Film Etiketi (ikon + başlık tek rozet)
                   Row(
                     children: [
-                      // Mini film posteri
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(4),
-                        child: Image.network(
-                          moviePoster,
-                          width: 18,
-                          height: 26,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) => Container(
-                            width: 18,
-                            height: 26,
-                            color: Colors.white12,
-                            child: const Icon(Icons.movie,
-                                size: 12, color: Colors.white24),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 6),
                       Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 6, vertical: 2),
+                            horizontal: 8, vertical: 4),
                         decoration: BoxDecoration(
-                          color: Colors.redAccent.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(6),
+                          color: Colors.redAccent.withValues(alpha: 0.16),
+                          borderRadius: BorderRadius.circular(8),
                           border: Border.all(
-                              color: Colors.redAccent.withOpacity(0.2)),
-                        ),
-                        child: Text(
-                          movieTitle,
-                          style: const TextStyle(
-                            color: Colors.redAccent,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
+                            color: Colors.redAccent.withValues(alpha: 0.28),
                           ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.movie,
+                              size: 12,
+                              color: Colors.redAccent,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              movieTitle,
+                              style: const TextStyle(
+                                color: Colors.redAccent,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ],
@@ -425,6 +539,98 @@ class _ChatCard extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _SwipeToDeleteChatItem extends StatefulWidget {
+  final Widget child;
+  final VoidCallback onDelete;
+
+  const _SwipeToDeleteChatItem({
+    super.key,
+    required this.child,
+    required this.onDelete,
+  });
+
+  @override
+  State<_SwipeToDeleteChatItem> createState() => _SwipeToDeleteChatItemState();
+}
+
+class _SwipeToDeleteChatItemState extends State<_SwipeToDeleteChatItem> {
+  static const double _maxReveal = 64;
+  static const double _dismissThresholdRatio = 0.62;
+  static const double _openThreshold = 36;
+
+  double _offsetX = 0;
+
+  void _handleDragUpdate(DragUpdateDetails details) {
+    final next = (_offsetX + details.delta.dx).clamp(-_maxReveal * 2, 0.0);
+    setState(() => _offsetX = next);
+  }
+
+  void _handleDragEnd(DragEndDetails details, double width) {
+    final dismissThreshold = width * _dismissThresholdRatio;
+    if (-_offsetX >= dismissThreshold) {
+      widget.onDelete();
+      return;
+    }
+
+    if (-_offsetX >= _openThreshold) {
+      setState(() => _offsetX = -_maxReveal);
+    } else {
+      setState(() => _offsetX = 0);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return Stack(
+          children: [
+            Positioned.fill(
+              child: Container(
+                margin: const EdgeInsets.symmetric(vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.redAccent.withValues(alpha: 0.9),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: SizedBox(
+                    width: _maxReveal,
+                    child: Center(
+                      child: IconButton(
+                        icon: const Icon(Icons.delete, color: Colors.white),
+                        onPressed: widget.onDelete,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onHorizontalDragUpdate: _handleDragUpdate,
+              onHorizontalDragEnd: (d) =>
+                  _handleDragEnd(d, constraints.maxWidth),
+              onTap: () {
+                if (_offsetX != 0) {
+                  setState(() => _offsetX = 0);
+                  return;
+                }
+              },
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 160),
+                curve: Curves.easeOut,
+                transform: Matrix4.translationValues(_offsetX, 0, 0),
+                child: widget.child,
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }

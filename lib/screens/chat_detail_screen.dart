@@ -1,11 +1,13 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import '../services/api_service.dart';
 import '../services/chat_service.dart';
+import '../services/global_chat_service.dart';
 
 class ChatDetailScreen extends StatefulWidget {
   final String username;
   final String avatarSeed;
+  final String? avatarUrl;
   final bool isOnline;
   final String movieTitle;
   final String? moviePoster; // Film posteri URL'si (arka plan için)
@@ -17,6 +19,7 @@ class ChatDetailScreen extends StatefulWidget {
     super.key,
     required this.username,
     required this.avatarSeed,
+    this.avatarUrl,
     required this.isOnline,
     required this.movieTitle,
     this.moviePoster,
@@ -42,6 +45,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   // Arkadaşlık durumu: "none" | "pending_sent" | "pending_received" | "friends"
   String _friendStatus = 'none';
   bool _isFriendLoading = false;
+  String? _myUserId;
 
   // ── Hızlı Mesajlar (ilk mesaj için) ──────────────────────
   static const List<String> _quickMessages = [
@@ -57,8 +61,65 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   void initState() {
     super.initState();
     _messages = List<Map<String, dynamic>>.from(widget.initialMessages);
+    _loadMyUserId();
     _loadFriendStatus();
     _setupWebSocket();
+    // Bu odaya girdiğimizde global dinleyiciye haber ver
+    // Böylece aynı odadan gelen mesajlar bildirim balonu olarak gösterilmez
+    if (widget.roomId != null) {
+      GlobalChatService.instance.setActiveRoom(widget.roomId!);
+    }
+  }
+
+  Future<void> _loadMyUserId() async {
+    final profile = await ApiService.getProfile();
+    if (mounted && profile != null) {
+      setState(() {
+        _myUserId =
+            (profile['userId'] ?? profile['_id'] ?? profile['id'])?.toString();
+      });
+      // Geçmiş mesajları yükle
+      if (widget.roomId != null) {
+        await _loadMessages();
+      }
+
+      setState(() {
+        // WebSocket'ten önce gelen mesajların isMe'sini geriye dönük düzeltelim
+        for (var m in _messages) {
+          if (m['senderId'] != null) {
+            m['isMe'] = m['senderId'] == _myUserId;
+          }
+        }
+      });
+    }
+  }
+
+  Future<void> _loadMessages() async {
+    if (widget.roomId == null) return;
+    final history = await ApiService.getChatMessages(widget.roomId!);
+    if (!mounted) return;
+
+    setState(() {
+      _messages = history.map((m) {
+        return {
+          'text': m['content'] ?? '',
+          'isMe': m['senderId'] == _myUserId,
+          'time': _formatTimestamp(m['timestamp']),
+          'status': m['status'] ?? 'delivered',
+          'senderId': m['senderId'],
+        };
+      }).toList();
+    });
+    _scrollToBottom();
+  }
+
+  String _formatTimestamp(dynamic ts) {
+    if (ts == null) return _currentTime();
+    final int timestamp = (ts is int) ? ts : int.tryParse(ts.toString()) ?? 0;
+    if (timestamp == 0) return _currentTime();
+
+    final date = DateTime.fromMillisecondsSinceEpoch(timestamp * 1000);
+    return DateFormat('HH:mm').format(date);
   }
 
   void _setupWebSocket() {
@@ -69,20 +130,75 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       if (!mounted) return;
 
       final type = msg['type'];
+      debugPrint(
+        '[CHAT-DBG] ws_event type=$type senderId=${msg['senderId']} status=${msg['status']} myUserId=$_myUserId roomId=${widget.roomId}',
+      );
 
       if (type == 'message') {
+        // Kendi mesaj echo'sunda yeni bubble eklemek yerine lokal mesajın status'unu merge et
+        if (_myUserId != null && msg['senderId'] == _myUserId) {
+          final incomingContent = (msg['content'] ?? '').toString();
+          final incomingStatus = (msg['status'] ?? 'delivered').toString();
+          bool merged = false;
+
+          setState(() {
+            for (int i = _messages.length - 1; i >= 0; i--) {
+              final m = _messages[i];
+              final isMe = m['isMe'] == true;
+              final text = (m['text'] ?? '').toString();
+              final status = (m['status'] ?? 'sent').toString();
+              final isPending = status == 'sent' || status == 'delivered';
+
+              if (isMe && text == incomingContent && isPending) {
+                m['status'] = incomingStatus;
+                if (msg['timestamp'] != null) {
+                  m['time'] = _formatTimestamp(msg['timestamp']);
+                }
+                merged = true;
+                break;
+              }
+            }
+
+            // İçerik bazlı eşleşme olmazsa en son pending kendi mesajını güncelle (fallback)
+            if (!merged) {
+              for (int i = _messages.length - 1; i >= 0; i--) {
+                final m = _messages[i];
+                final isMe = m['isMe'] == true;
+                final status = (m['status'] ?? 'sent').toString();
+                final isPending = status == 'sent' || status == 'delivered';
+                if (isMe && isPending) {
+                  m['status'] = incomingStatus;
+                  if (msg['timestamp'] != null) {
+                    m['time'] = _formatTimestamp(msg['timestamp']);
+                  }
+                  merged = true;
+                  break;
+                }
+              }
+            }
+          });
+
+          debugPrint(
+            '[CHAT-DBG] own_message_echo_merged senderId=${msg['senderId']} status=$incomingStatus merged=$merged',
+          );
+          return;
+        }
+
         setState(() {
           _messages.add({
             'text': msg['content'] ?? '',
-            'isMe': msg['userId'] ==
-                null, // Kendim yollamadıysam target id vardır, ama kendi yolladığım zaten anında ekleniyo
+            'isMe': _myUserId != null ? (msg['senderId'] == _myUserId) : false,
             'time': _currentTime(),
             'status': msg['status'] ?? 'delivered',
             ...msg,
           });
         });
         _scrollToBottom();
+
+        // Karşıdan yeni mesaj geldiyse (ekran açıksa) anında okundu bilgisi gönder
+        _chatService.sendReadReceipt();
       } else if (type == 'read_receipt') {
+        debugPrint('[CHAT-DBG] read_receipt_received roomId=${widget.roomId}');
         // Ekrandaki tüm kendi attığım sent/delivered mesajları read yap
         setState(() {
           for (var m in _messages) {
@@ -123,6 +239,10 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
 
   @override
   void dispose() {
+    // Chat ekranından çıkınca global dinleyicide aktif oda bayrağını sıfırla
+    GlobalChatService.instance.clearActiveRoom();
+    // Ekrandan çıkınca websocket'i kapat; aksi halde odada var görünmeye devam eder
+    _chatService.dispose();
     _messageController.dispose();
     _scrollController.dispose();
     _focusNode.dispose();
@@ -139,12 +259,15 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     // Lokal olarak listeye ekle ki anında ekranımızda da gözüksün
     setState(() {
       _messages.add({
-        'content': text.trim(),
+        'text': text.trim(),
         'isMe': true,
         'time': _currentTime(),
         'status': 'sent',
       });
     });
+    debugPrint(
+      '[CHAT-DBG] local_message_appended status=sent roomId=${widget.roomId} myUserId=$_myUserId',
+    );
 
     _scrollToBottom();
   }
@@ -288,57 +411,70 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
 
     return Scaffold(
       backgroundColor: const Color(0xFF0F0F0F),
-      body: Stack(
-        fit: StackFit.expand,
+      body: Column(
         children: [
-          // ── Film Posteri Arka Plan ──────────────────────
-          if (poster != null && poster.isNotEmpty)
-            Positioned.fill(
-              child: Image.network(
-                poster,
-                fit: BoxFit.cover,
-                filterQuality: FilterQuality.high,
-                errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-              ),
-            ),
+          // Status bar alanı — her zaman siyah
+          SizedBox(height: MediaQuery.of(context).padding.top),
 
-          // ── Koyu Overlay (poster gözü almasın) ─────────
-          if (poster != null && poster.isNotEmpty)
-            Positioned.fill(
-              child: Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      const Color(0xFF0F0F0F).withOpacity(0.85),
-                      const Color(0xFF0F0F0F).withOpacity(0.90),
+          // İçerik: arka plan görseli burada başlar (status bar'ın altı)
+          Expanded(
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                // ── Film Posteri Arka Plan ──────────────────────
+                if (poster != null && poster.isNotEmpty)
+                  Positioned.fill(
+                    child: Image.network(
+                      poster,
+                      fit: BoxFit.cover,
+                      filterQuality: FilterQuality.high,
+                      errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                    ),
+                  ),
+
+                // ── Koyu Overlay (poster gözü almasın) ─────────
+                if (poster != null && poster.isNotEmpty)
+                  Positioned.fill(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            const Color(0xFF0F0F0F).withValues(alpha: 0.85),
+                            const Color(0xFF0F0F0F).withValues(alpha: 0.90),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+
+                // ── İçerik ─────────────────────────────────────
+                SafeArea(
+                  top: false, // üstten zaten SizedBox ile boşluk verdik
+                  child: Column(
+                    children: [
+                      // ── Üst AppBar ─────────────────────────────────
+                      _buildAppBar(),
+
+                      // ── Film Eşleşme Bandı ─────────────────────────
+                      _buildMovieBanner(),
+
+                      // ── Sohbet Alanı ───────────────────────────────
+                      Expanded(
+                        child: hasMessages
+                            ? _buildMessageList()
+                            : _buildEmptyState(),
+                      ),
+
+                      // ── Hızlı Mesajlar (sadece boş sohbette) ──────
+                      if (!hasMessages) _buildQuickMessages(),
+
+                      // ── Mesaj Giriş Alanı ──────────────────────────
+                      _buildMessageInput(),
                     ],
                   ),
                 ),
-              ),
-            ),
-
-          // ── İçerik ─────────────────────────────────────
-          SafeArea(
-            child: Column(
-              children: [
-                // ── Üst AppBar ─────────────────────────────────
-                _buildAppBar(),
-
-                // ── Film Eşleşme Bandı ─────────────────────────
-                _buildMovieBanner(),
-
-                // ── Sohbet Alanı ───────────────────────────────
-                Expanded(
-                  child: hasMessages ? _buildMessageList() : _buildEmptyState(),
-                ),
-
-                // ── Hızlı Mesajlar (sadece boş sohbette) ──────
-                if (!hasMessages) _buildQuickMessages(),
-
-                // ── Mesaj Giriş Alanı ──────────────────────────
-                _buildMessageInput(),
               ],
             ),
           ),
@@ -375,12 +511,25 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   border: Border.all(color: Colors.white24, width: 1.5),
-                  image: DecorationImage(
-                    image: NetworkImage(
-                      'https://api.dicebear.com/7.x/avataaars/png?seed=${widget.avatarSeed}',
-                    ),
-                    fit: BoxFit.cover,
-                  ),
+                  color: const Color(0xFF1E1E1E),
+                ),
+                child: ClipOval(
+                  child: (widget.avatarUrl != null &&
+                          widget.avatarUrl!.trim().isNotEmpty)
+                      ? Image.network(
+                          widget.avatarUrl!,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => const Icon(
+                            Icons.person,
+                            color: Colors.white54,
+                            size: 22,
+                          ),
+                        )
+                      : const Icon(
+                          Icons.person,
+                          color: Colors.white54,
+                          size: 22,
+                        ),
                 ),
               ),
               if (widget.isOnline)
@@ -422,7 +571,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                     Icon(
                       Icons.movie_outlined,
                       size: 13,
-                      color: Colors.redAccent.withOpacity(0.8),
+                      color: Colors.redAccent.withValues(alpha: 0.8),
                     ),
                     const SizedBox(width: 4),
                     Flexible(
@@ -430,7 +579,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                         widget.movieTitle,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
-                          color: Colors.redAccent.withOpacity(0.8),
+                          color: Colors.redAccent.withValues(alpha: 0.8),
                           fontSize: 12,
                           fontWeight: FontWeight.w500,
                         ),
@@ -455,10 +604,10 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                       padding: const EdgeInsets.symmetric(
                           horizontal: 10, vertical: 6),
                       decoration: BoxDecoration(
-                        color: Colors.greenAccent.withOpacity(0.12),
+                        color: Colors.greenAccent.withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(8),
                         border: Border.all(
-                            color: Colors.greenAccent.withOpacity(0.4)),
+                            color: Colors.greenAccent.withValues(alpha: 0.4)),
                       ),
                       child: const Text('Kabul et',
                           style: TextStyle(
@@ -476,10 +625,10 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                       padding: const EdgeInsets.symmetric(
                           horizontal: 10, vertical: 6),
                       decoration: BoxDecoration(
-                        color: Colors.redAccent.withOpacity(0.12),
+                        color: Colors.redAccent.withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(8),
                         border: Border.all(
-                            color: Colors.redAccent.withOpacity(0.4)),
+                            color: Colors.redAccent.withValues(alpha: 0.4)),
                       ),
                       child: const Text('Reddet',
                           style: TextStyle(
@@ -502,10 +651,10 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   decoration: BoxDecoration(
-                    color: _friendButtonColor.withOpacity(0.12),
+                    color: _friendButtonColor.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(
-                      color: _friendButtonColor.withOpacity(0.4),
+                      color: _friendButtonColor.withValues(alpha: 0.4),
                     ),
                   ),
                   child: Row(
@@ -675,12 +824,12 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       decoration: BoxDecoration(
         gradient: LinearGradient(
           colors: [
-            Colors.redAccent.withOpacity(0.08),
+            Colors.redAccent.withValues(alpha: 0.08),
             Colors.transparent,
           ],
         ),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.white.withOpacity(0.05)),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
       ),
       child: Row(
         children: [
@@ -733,7 +882,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
             decoration: BoxDecoration(
               color: isMe
-                  ? Colors.redAccent.withOpacity(0.2)
+                  ? Colors.redAccent.withValues(alpha: 0.2)
                   : const Color(0xFF1E1E1E),
               borderRadius: BorderRadius.only(
                 topLeft: const Radius.circular(16),
@@ -745,8 +894,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
               ),
               border: Border.all(
                 color: isMe
-                    ? Colors.redAccent.withOpacity(0.25)
-                    : Colors.white.withOpacity(0.06),
+                    ? Colors.redAccent.withValues(alpha: 0.25)
+                    : Colors.white.withValues(alpha: 0.06),
               ),
             ),
             child: Column(
@@ -768,7 +917,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                     Text(
                       time,
                       style: TextStyle(
-                        color: Colors.white.withOpacity(0.3),
+                        color: Colors.white.withValues(alpha: 0.3),
                         fontSize: 10,
                       ),
                     ),
@@ -799,14 +948,14 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
               height: 80,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: Colors.redAccent.withOpacity(0.08),
+                color: Colors.redAccent.withValues(alpha: 0.08),
                 border: Border.all(
-                    color: Colors.redAccent.withOpacity(0.15), width: 2),
+                    color: Colors.redAccent.withValues(alpha: 0.15), width: 2),
               ),
               child: Icon(
                 Icons.chat_bubble_outline_rounded,
                 size: 36,
-                color: Colors.redAccent.withOpacity(0.5),
+                color: Colors.redAccent.withValues(alpha: 0.5),
               ),
             ),
             const SizedBox(height: 20),
@@ -823,7 +972,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
               'İlk adımı at! Hızlı mesajlardan birini seç\nveya kendi mesajını yaz.',
               textAlign: TextAlign.center,
               style: TextStyle(
-                color: Colors.white.withOpacity(0.3),
+                color: Colors.white.withValues(alpha: 0.3),
                 fontSize: 13,
                 height: 1.5,
               ),
@@ -865,7 +1014,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                     color: const Color(0xFF1A1A1A),
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(
-                      color: Colors.redAccent.withOpacity(0.2),
+                      color: Colors.redAccent.withValues(alpha: 0.2),
                     ),
                   ),
                   child: Text(
@@ -892,7 +1041,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       decoration: BoxDecoration(
         color: const Color(0xFF0F0F0F),
         border: Border(
-          top: BorderSide(color: Colors.white.withOpacity(0.06)),
+          top: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
         ),
       ),
       child: Row(
@@ -904,7 +1053,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
               decoration: BoxDecoration(
                 color: const Color(0xFF1A1A1A),
                 borderRadius: BorderRadius.circular(24),
-                border: Border.all(color: Colors.white.withOpacity(0.08)),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
               ),
               child: TextField(
                 controller: _messageController,
@@ -913,7 +1062,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                 decoration: InputDecoration(
                   hintText: 'Mesaj yaz...',
                   hintStyle: TextStyle(
-                    color: Colors.white.withOpacity(0.25),
+                    color: Colors.white.withValues(alpha: 0.25),
                     fontSize: 14,
                   ),
                   border: InputBorder.none,
@@ -942,7 +1091,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                 borderRadius: BorderRadius.circular(14),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.redAccent.withOpacity(0.3),
+                    color: Colors.redAccent.withValues(alpha: 0.3),
                     blurRadius: 8,
                     offset: const Offset(0, 3),
                   ),

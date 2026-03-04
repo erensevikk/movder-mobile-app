@@ -31,6 +31,11 @@ func SearchMovies() gin.HandlerFunc {
 			return
 		}
 
+		// Sonuçları en fazla 5 ile sınırla — Flutter'a gereksiz veri gönderme
+		if len(results.Results) > 5 {
+			results.Results = results.Results[:5]
+		}
+
 		c.JSON(http.StatusOK, results)
 	}
 }

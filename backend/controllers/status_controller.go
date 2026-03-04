@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // SetWatchStatus — Kullanıcının izleme durumunu belirler
@@ -20,6 +22,8 @@ import (
 // Redis'te iki key oluşturulur:
 //   - watching:<userId> → Hash (film bilgileri, TTL: 6 saat)
 //   - movie:<tmdbId>:watchers → Set (bu filmi izleyenlerin listesi)
+//
+// Ayrıca MongoDB'deki kullanıcının watch_history alanına eşsiz olarak eklenir
 func SetWatchStatus() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := context.Background()
@@ -58,6 +62,37 @@ func SetWatchStatus() gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "İzleme durumu kaydedilemedi"})
 			return
 		}
+
+		// --------------------------------------------------------------------------
+		// MONGODB: İzleme Geçmişini Güncelle
+		// --------------------------------------------------------------------------
+		objectID, err := primitive.ObjectIDFromHex(userId)
+		if err == nil {
+			userCollection := config.GetCollection(config.DB, "users")
+			historyItem := models.WatchHistoryItem{
+				TmdbID:     input.TmdbID,
+				MovieName:  input.MovieName,
+				PosterPath: input.PosterPath,
+				WatchedAt:  input.StartedAt,
+			}
+
+			// Eğer bu filmi daha önce geçmişe eklemediyse (tmdb_id ne input.TmdbID) ekle
+			// Bu sayede her film listede sadece bir kez kalır ve İLK izleme sırası korunur
+			filter := bson.M{
+				"_id":                   objectID,
+				"watch_history.tmdb_id": bson.M{"$ne": input.TmdbID},
+			}
+			update := bson.M{
+				"$push": bson.M{"watch_history": historyItem},
+			}
+
+			_, mongoErr := userCollection.UpdateOne(ctx, filter, update)
+			if mongoErr != nil {
+				// MongoDB hatası ana akışı bozmasın ama loglayalım
+				fmt.Printf("[STATUS] Watch history sync error: %v\n", mongoErr)
+			}
+		}
+		// --------------------------------------------------------------------------
 
 		c.JSON(http.StatusOK, gin.H{
 			"message":   "İzleme durumu güncellendi!",

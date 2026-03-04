@@ -5,6 +5,8 @@ import 'dart:convert';
 import 'models/movie.dart';
 import 'services/api_service.dart';
 import 'services/auth_service.dart';
+import 'services/notification_service.dart';
+import 'services/global_chat_service.dart';
 import 'screens/movie_detail_screen.dart';
 import 'screens/chat_list_screen.dart';
 import 'screens/profile_screen.dart';
@@ -28,6 +30,9 @@ class MovderApp extends StatelessWidget {
         brightness: Brightness.dark,
         scaffoldBackgroundColor: const Color(0xFF0F0F0F),
         primaryColor: Colors.redAccent,
+        splashFactory: NoSplash.splashFactory,
+        splashColor: Colors.transparent,
+        highlightColor: Colors.transparent,
       ),
       home: const MainNavigatorScreen(),
     );
@@ -47,12 +52,33 @@ class MainNavigatorScreen extends StatefulWidget {
 class _MainNavigatorScreenState extends State<MainNavigatorScreen> {
   int _currentIndex = 0;
 
-  final List<Widget> _pages = [
-    const MovieRadarScreen(), // Film Radar sayfası artık Anasayfa oldu
-    const MatchScreen(), // Yeni kodlanan Eşleşme arama ekranı
-    const ChatListScreen(),
-    const ProfileScreen(), // Yeni kodlanan Profil/Hesabım ekranı
-  ];
+  final GlobalKey<MatchScreenState> _matchKey = GlobalKey<MatchScreenState>();
+  Key _profileKey = UniqueKey();
+  int _chatRefreshSignal = 0;
+
+  List<Widget> get _pages => [
+        const MovieRadarScreen(),
+        MatchScreen(key: _matchKey),
+        ChatListScreen(refreshSignal: _chatRefreshSignal),
+        ProfileScreen(key: _profileKey),
+      ];
+
+  @override
+  void initState() {
+    super.initState();
+    // Overlay bir sonraki frame'de hazır olur
+    WidgetsBinding.instance.addPostFrameCallback((_) => _initServices());
+  }
+
+  Future<void> _initServices() async {
+    if (!mounted) return;
+    // Bildirim servisine global Overlay context'ini ver
+    NotificationService.instance.init(context);
+    // Aktif chat odaları backend'den gelene kadar boş başlatıyoruz.
+    // chat_list_screen gerçek API'ye bağlanınca burayı doldururuz.
+    await GlobalChatService.instance.init([]);
+    GlobalChatService.instance.setChatListVisible(_currentIndex == 2);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -65,13 +91,28 @@ class _MainNavigatorScreenState extends State<MainNavigatorScreen> {
         backgroundColor: const Color(0xFF0F0F0F),
         selectedItemColor: Colors.redAccent,
         unselectedItemColor: Colors.white54,
-        type: BottomNavigationBarType
-            .fixed, // 3'ten fazla eleman olunca isimlerin kaybolmaması için
+        type: BottomNavigationBarType.fixed,
         currentIndex: _currentIndex,
         onTap: (index) {
+          if (index == 1) {
+            _matchKey.currentState?.setVisibility(true);
+            _matchKey.currentState?.reloadWatchingStatus();
+          } else {
+            _matchKey.currentState?.setVisibility(false);
+          }
+
           setState(() {
+            if (index == 2 && _currentIndex != 2) {
+              _chatRefreshSignal++;
+            }
             _currentIndex = index;
+            if (index == 3) {
+              _profileKey = UniqueKey();
+            }
           });
+
+          // Sohbetler sekmesi görünürse in-app notification bastırılır.
+          GlobalChatService.instance.setChatListVisible(index == 2);
         },
         items: const [
           BottomNavigationBarItem(
@@ -96,8 +137,6 @@ class _MainNavigatorScreenState extends State<MainNavigatorScreen> {
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// KAYIT EKRANI
 // ─────────────────────────────────────────────────────────────
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -710,10 +749,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         padding: const EdgeInsets.symmetric(
                             horizontal: 10, vertical: 6),
                         decoration: BoxDecoration(
-                          color: Colors.redAccent.withOpacity(0.15),
+                          color: Colors.redAccent.withValues(alpha: 0.15),
                           borderRadius: BorderRadius.circular(999),
                           border: Border.all(
-                              color: Colors.redAccent.withOpacity(0.4)),
+                              color: Colors.redAccent.withValues(alpha: 0.4)),
                         ),
                         child: const Row(
                           mainAxisSize: MainAxisSize.min,
@@ -1348,7 +1387,7 @@ class _MovieRadarScreenState extends State<MovieRadarScreen> {
                       stops: const [0.45, 1.0],
                       colors: [
                         Colors.transparent,
-                        Colors.black.withOpacity(0.88),
+                        Colors.black.withValues(alpha: 0.88),
                       ],
                     ),
                   ),
@@ -1361,7 +1400,7 @@ class _MovieRadarScreenState extends State<MovieRadarScreen> {
                     padding:
                         const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                     decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.72),
+                      color: Colors.black.withValues(alpha: 0.72),
                       borderRadius: BorderRadius.circular(6),
                     ),
                     child: Row(
@@ -1390,9 +1429,10 @@ class _MovieRadarScreenState extends State<MovieRadarScreen> {
                       padding: const EdgeInsets.symmetric(
                           horizontal: 6, vertical: 3),
                       decoration: BoxDecoration(
-                        color: Colors.black.withOpacity(0.72),
+                        color: Colors.black.withValues(alpha: 0.72),
                         border: Border.all(
-                            color: Colors.redAccent.withOpacity(0.8), width: 1),
+                            color: Colors.redAccent.withValues(alpha: 0.8),
+                            width: 1),
                         borderRadius: BorderRadius.circular(6),
                       ),
                       child: Row(

@@ -118,6 +118,7 @@ class ApiService {
     String? imageFileName,
     Uint8List? coverImageBytes,
     String? coverImageFileName,
+    bool deleteCover = false,
   }) async {
     final token = AuthService.token;
     if (token == null || token.isEmpty) return null;
@@ -146,6 +147,10 @@ class ApiService {
           http.MultipartFile.fromBytes('cover', coverImageBytes,
               filename: coverImageFileName),
         );
+      }
+
+      if (deleteCover) {
+        request.fields['delete_cover'] = 'true';
       }
 
       final streamed = await request.send();
@@ -528,6 +533,30 @@ class ApiService {
     }
   }
 
+  /// Belirli bir kullanıcının genel listelerini getir
+  static Future<List<Map<String, dynamic>>> getUserLists(String userId) async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return [];
+
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/api/lists/user/$userId'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final List raw = jsonDecode(response.body);
+        return raw.cast<Map<String, dynamic>>();
+      }
+      return [];
+    } catch (_) {
+      return [];
+    }
+  }
+
   /// Bir listeye ait içerikleri/filmleri getir
   static Future<List<Map<String, dynamic>>> getListItems(String listId) async {
     final token = AuthService.token;
@@ -831,6 +860,131 @@ class ApiService {
       };
     } catch (e) {
       return {'error': 'Import sirasinda baglanti hatasi: $e'};
+    }
+  }
+
+  /// Eşleşmeyi kabul et — karşı taraf da kabul ettiyse roomId döner
+  static Future<Map<String, dynamic>?> acceptMatch({
+    required String roomId,
+    required String targetUserId,
+  }) async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return null;
+
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/api/match/accept'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+            body: jsonEncode({'roomId': roomId, 'targetUserId': targetUserId}),
+          )
+          .timeout(const Duration(seconds: 5));
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Eşleşmeyi reddet — kuyruk aramasında kalmaya devam eder ama aynı kişiyle tekrar hemen eşleşmemeyi sağlar.
+  static Future<void> rejectMatch({
+    required String roomId,
+    required String targetUserId,
+  }) async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return;
+
+    try {
+      await http
+          .post(
+            Uri.parse('$baseUrl/api/match/reject'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+            body: jsonEncode({'roomId': roomId, 'targetUserId': targetUserId}),
+          )
+          .timeout(const Duration(seconds: 5));
+    } catch (_) {}
+  }
+
+  /// Karşı tarafın kabul durumunu sorgula (polling)
+  static Future<Map<String, dynamic>?> getMatchAcceptStatus(
+      String roomId) async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return null;
+
+    try {
+      final response = await http.get(
+        Uri.parse(
+            '$baseUrl/api/match/accept-status?roomId=${Uri.encodeComponent(roomId)}'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      ).timeout(const Duration(seconds: 5));
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Aktif sohbet odalarını listeler
+  static Future<List<Map<String, dynamic>>> getChatRooms() async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return [];
+
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/api/chat/rooms'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final List raw = jsonDecode(response.body);
+        return raw.cast<Map<String, dynamic>>();
+      }
+      return [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Bir odanın sohbet geçmişini döner
+  static Future<List<Map<String, dynamic>>> getChatMessages(
+      String roomId) async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return [];
+
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/api/chat/rooms/$roomId/messages'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final List raw = jsonDecode(response.body);
+        return raw.cast<Map<String, dynamic>>();
+      }
+      return [];
+    } catch (_) {
+      return [];
     }
   }
 }

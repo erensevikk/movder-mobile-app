@@ -109,6 +109,23 @@ func RegisterUser() gin.HandlerFunc {
 			return
 		}
 
+		// 7. Yeni kullanıcı için "Favori Filmler" listesini otomatik oluştur
+		listColl := config.GetCollection(config.DB, "lists")
+		_, listErr := listColl.InsertOne(ctx, models.List{
+			UserID:      user.ID.Hex(),
+			Name:        "Favori Filmler",
+			Description: "Favori filmlerim",
+			IsPublic:    true,
+			CreatedAt:   time.Now(),
+			UpdatedAt:   time.Now(),
+		})
+		if listErr != nil {
+			log.Printf("[REGISTER] Favori Filmler listesi olusturulamadi -> userId=%s err=%v", user.ID.Hex(), listErr)
+			// Liste hatası kritik değil, kayıt yine de başarılı sayılır
+		} else {
+			log.Printf("[REGISTER] Favori Filmler listesi olusturuldu -> userId=%s", user.ID.Hex())
+		}
+
 		jwtSecret := config.GetEnv("JWT_SECRET", "default_secret")
 		token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 			"userId":   user.ID.Hex(),
@@ -223,14 +240,17 @@ func GetProfile() gin.HandlerFunc {
 		}
 
 		c.JSON(http.StatusOK, gin.H{
-			"userId":      user.ID.Hex(),
-			"username":    user.Username,
-			"email":       user.Email,
-			"city":        user.City,
-			"birthDate":   user.BirthDate,
-			"description": user.Description,
-			"avatarUrl":   user.AvatarURL,
-			"createdAt":   user.CreatedAt,
+			"userId":             user.ID.Hex(),
+			"username":           user.Username,
+			"email":              user.Email,
+			"city":               user.City,
+			"birthDate":          user.BirthDate,
+			"description":        user.Description,
+			"avatarUrl":          user.AvatarURL,
+			"coverUrl":           user.CoverURL,
+			"letterboxdImported": user.LetterboxdImported,
+			"watchHistory":       user.WatchHistory,
+			"createdAt":          user.CreatedAt,
 		})
 	}
 }
@@ -286,6 +306,12 @@ func SearchUsers() gin.HandlerFunc {
 				u["userId"] = id.Hex()
 				u["_id"] = id.Hex()
 			}
+
+			// Mongo'da snake_case (avatar_url) gelen alanı API cevabında camelCase (avatarUrl)
+			// olarak da normalize et ki mobil taraf tutarlı anahtar ile okuyabilsin.
+			if avatarURL, ok := u["avatar_url"]; ok {
+				u["avatarUrl"] = avatarURL
+			}
 		}
 
 		c.JSON(http.StatusOK, gin.H{"users": users})
@@ -336,10 +362,12 @@ func GetUserProfile() gin.HandlerFunc {
 			"city":           target.City,
 			"description":    target.Description,
 			"avatarUrl":      target.AvatarURL,
+			"coverUrl":       target.CoverURL,
 			"createdAt":      target.CreatedAt,
 			"isFriend":       isFriend,
 			"isMatched":      isMatched,
 			"canSeeWatching": canSeeWatching,
+			"watchHistory":   target.WatchHistory,
 			"watching":       false,
 		}
 
@@ -477,10 +505,16 @@ func UnmatchUser() gin.HandlerFunc {
 			return
 		}
 
-		// 1. Arkadaşlıktan çıkar
+		// 1. Arkadaşlıktan çıkar ve birbirini unmatched_users listesine ekle
 		userCol := config.GetCollection(config.DB, "users")
-		_, _ = userCol.UpdateOne(ctx, bson.M{"_id": userID}, bson.M{"$pull": bson.M{"friends": targetID}})
-		_, _ = userCol.UpdateOne(ctx, bson.M{"_id": targetID}, bson.M{"$pull": bson.M{"friends": userID}})
+		_, _ = userCol.UpdateOne(ctx, bson.M{"_id": userID}, bson.M{
+			"$pull":     bson.M{"friends": targetID},
+			"$addToSet": bson.M{"unmatched_users": targetID},
+		})
+		_, _ = userCol.UpdateOne(ctx, bson.M{"_id": targetID}, bson.M{
+			"$pull":     bson.M{"friends": userID},
+			"$addToSet": bson.M{"unmatched_users": userID},
+		})
 
 		// 2. Varsa pending istekleri sil
 		friendReqCol := config.GetCollection(config.DB, "friend_requests")
@@ -510,7 +544,7 @@ func notifyUnmatch(u1, u2 string) {
 
 	broadcastToRoom(roomID, ChatMessage{
 		Type:      "unmatch",
-		UserID:    u1,
+		SenderID:  u1,
 		Content:   "Eşleşme iptal edildi",
 		Timestamp: time.Now().Unix(),
 		RoomID:    roomID,
@@ -542,10 +576,8 @@ func UpdateProfile() gin.HandlerFunc {
 		file, err := c.FormFile("avatar")
 		var avatarURL string
 		if err == nil && file != nil {
-			// Klasit formatlama
 			filename := fmt.Sprintf("%s_%s", userIDHex, file.Filename)
 			savePath := "uploads/" + filename
-
 			if err := c.SaveUploadedFile(file, savePath); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "Fotoğraf kaydedilemedi"})
 				return
@@ -553,15 +585,32 @@ func UpdateProfile() gin.HandlerFunc {
 			avatarURL = "/uploads/" + filename
 		}
 
+		coverFile, coverErr := c.FormFile("cover")
+		var coverURL string
+		if coverErr == nil && coverFile != nil {
+			filename := fmt.Sprintf("cover_%s_%s", userIDHex, coverFile.Filename)
+			savePath := "uploads/" + filename
+			if err := c.SaveUploadedFile(coverFile, savePath); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Kapak fotoğrafı kaydedilemedi"})
+				return
+			}
+			coverURL = "/uploads/" + filename
+		}
+
 		updateFields := bson.M{}
 
-		// Eğer description gönderilmişse güncelle (boş string olarak da güncellenebilir)
 		if _, ok := c.GetPostForm("description"); ok {
 			updateFields["description"] = description
 		}
-
 		if avatarURL != "" {
 			updateFields["avatar_url"] = avatarURL
+		}
+		if coverURL != "" {
+			updateFields["cover_url"] = coverURL
+		}
+		// Kapak sil komutu
+		if c.PostForm("delete_cover") == "true" {
+			updateFields["cover_url"] = ""
 		}
 
 		if len(updateFields) == 0 {
@@ -579,6 +628,7 @@ func UpdateProfile() gin.HandlerFunc {
 			"message":     "Profil başarıyla güncellendi",
 			"description": description,
 			"avatarUrl":   avatarURL,
+			"coverUrl":    coverURL,
 		})
 	}
 }

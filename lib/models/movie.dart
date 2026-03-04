@@ -11,6 +11,7 @@ class Movie {
   final String? originalTitle;
   final List<int> genreIds;
   final int? runtime;
+  final bool isOverviewFallback;
   int watcherCount; // Canlı izleyici sayısı (Go backend'den eklenecek)
 
   Movie({
@@ -25,6 +26,7 @@ class Movie {
     this.originalTitle,
     this.genreIds = const [],
     this.runtime,
+    this.isOverviewFallback = false,
     this.watcherCount = 0,
   });
 
@@ -50,13 +52,18 @@ class Movie {
       originalTitle: json['original_title'],
       runtime: json['runtime'],
       genreIds: parsedGenreIds,
+      isOverviewFallback: json['is_overview_fallback'] ?? false,
       watcherCount: json['watcher_count'] ?? 0,
     );
   }
 
-  /// TMDB poster URL'si (w500 boyutu)
+  /// TMDB poster URL'si (w500 boyutu - orijinal kaliteli)
   String get posterUrl =>
       posterPath != null ? 'https://image.tmdb.org/t/p/w500$posterPath' : '';
+
+  /// TMDB poster URL'si (w200 boyutu - arama sonuçları için düşük bellek kullanımı)
+  String get posterUrlW200 =>
+      posterPath != null ? 'https://image.tmdb.org/t/p/w200$posterPath' : '';
 
   /// TMDB backdrop URL'si (w780 boyutu)
   String get backdropUrl => backdropPath != null

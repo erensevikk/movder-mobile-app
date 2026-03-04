@@ -29,7 +29,7 @@ func main() {
 		panic("users semasi uygulanamadi: " + err.Error())
 	}
 
-	// 3. Gin motorunu olustur
+	// 3. Gin motorunu oluştur
 	r := gin.Default()
 
 	// 4. Rotalari sisteme tanit

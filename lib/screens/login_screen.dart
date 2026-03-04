@@ -185,7 +185,7 @@ class _LoginScreenState extends State<LoginScreen>
           BackdropFilter(
             filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
             child: Container(
-              color: Colors.black.withOpacity(0.7),
+              color: Colors.black.withValues(alpha: 0.7),
             ),
           ),
 
@@ -206,7 +206,7 @@ class _LoginScreenState extends State<LoginScreen>
                         width: 42,
                         height: 42,
                         decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.08),
+                          color: Colors.white.withValues(alpha: 0.08),
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(color: Colors.white12),
                         ),
@@ -234,7 +234,7 @@ class _LoginScreenState extends State<LoginScreen>
                         borderRadius: BorderRadius.circular(16),
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.redAccent.withOpacity(0.3),
+                            color: Colors.redAccent.withValues(alpha: 0.3),
                             blurRadius: 20,
                             offset: const Offset(0, 8),
                           ),
@@ -261,7 +261,7 @@ class _LoginScreenState extends State<LoginScreen>
                     Text(
                       'Film arkadaşların seni bekliyor.',
                       style: TextStyle(
-                        color: Colors.white.withOpacity(0.5),
+                        color: Colors.white.withValues(alpha: 0.5),
                         fontSize: 16,
                         fontWeight: FontWeight.w500,
                       ),
@@ -275,10 +275,10 @@ class _LoginScreenState extends State<LoginScreen>
                         width: double.infinity,
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
-                          color: Colors.redAccent.withOpacity(0.1),
+                          color: Colors.redAccent.withValues(alpha: 0.1),
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(
-                              color: Colors.redAccent.withOpacity(0.3)),
+                              color: Colors.redAccent.withValues(alpha: 0.3)),
                         ),
                         child: Row(
                           children: [
@@ -362,12 +362,12 @@ class _LoginScreenState extends State<LoginScreen>
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.redAccent,
                           disabledBackgroundColor:
-                              Colors.redAccent.withOpacity(0.5),
+                              Colors.redAccent.withValues(alpha: 0.5),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(16),
                           ),
                           elevation: 8,
-                          shadowColor: Colors.redAccent.withOpacity(0.4),
+                          shadowColor: Colors.redAccent.withValues(alpha: 0.4),
                         ),
                         child: _isLoading
                             ? const SizedBox(
@@ -398,19 +398,19 @@ class _LoginScreenState extends State<LoginScreen>
                         padding: const EdgeInsets.symmetric(
                             horizontal: 14, vertical: 8),
                         decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.04),
+                          color: Colors.white.withValues(alpha: 0.04),
                           borderRadius: BorderRadius.circular(10),
                         ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Icon(Icons.info_outline_rounded,
-                                size: 14, color: Colors.white.withOpacity(0.3)),
+                                size: 14, color: Colors.white.withValues(alpha: 0.3)),
                             const SizedBox(width: 6),
                             Text(
                               'Kullanıcı adı veya e-posta ile giriş yapabilirsin',
                               style: TextStyle(
-                                color: Colors.white.withOpacity(0.3),
+                                color: Colors.white.withValues(alpha: 0.3),
                                 fontSize: 12,
                               ),
                             ),
@@ -443,12 +443,12 @@ class _LoginScreenState extends State<LoginScreen>
       children: [
         Container(
           decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.06),
+            color: Colors.white.withValues(alpha: 0.06),
             borderRadius: BorderRadius.circular(14),
             border: Border.all(
               color: errorText != null
-                  ? Colors.redAccent.withOpacity(0.5)
-                  : Colors.white.withOpacity(0.08),
+                  ? Colors.redAccent.withValues(alpha: 0.5)
+                  : Colors.white.withValues(alpha: 0.08),
             ),
           ),
           child: TextField(
@@ -462,7 +462,7 @@ class _LoginScreenState extends State<LoginScreen>
               suffixIcon: suffixIcon,
               hintText: label,
               hintStyle: TextStyle(
-                color: Colors.white.withOpacity(0.25),
+                color: Colors.white.withValues(alpha: 0.25),
                 fontSize: 14,
                 fontWeight: FontWeight.w400,
               ),

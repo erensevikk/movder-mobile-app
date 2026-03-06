@@ -59,14 +59,18 @@ class ChatService {
     }
   }
 
-  void sendMessage(String text) {
+  bool sendMessage(String text, {String? clientMessageId}) {
     if (_channel != null && text.isNotEmpty) {
       final msg = {
         'type': 'message',
         'content': text.trim(),
+        if (clientMessageId != null && clientMessageId.isNotEmpty)
+          'clientMessageId': clientMessageId,
       };
       _channel!.sink.add(jsonEncode(msg));
+      return true;
     }
+    return false;
   }
 
   void sendReadReceipt() {

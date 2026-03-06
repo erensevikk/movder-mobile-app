@@ -34,13 +34,14 @@ func main() {
 
 	// 4. Rotalari sisteme tanit
 	r.Static("/uploads", "./uploads")
-	routes.UserRoutes(r)   // /register, /login, /api/profile
-	routes.TmdbRoutes(r)   // /search, /movie/:id, /trending
-	routes.StatusRoutes(r) // /api/status (POST, GET, DELETE)
-	routes.MatchRoutes(r)  // /api/match/check
-	routes.ChatRoutes(r)   // /ws/chat/:roomId
-	routes.ListRoutes(r)   // /api/lists
-	routes.FriendRoutes(r) // /api/friends
+	routes.UserRoutes(r)         // /register, /login, /api/profile
+	routes.TmdbRoutes(r)         // /search, /movie/:id, /trending
+	routes.StatusRoutes(r)       // /api/status (POST, GET, DELETE)
+	routes.MatchRoutes(r)        // /api/match/check
+	routes.ChatRoutes(r)         // /ws/chat/:roomId
+	routes.ListRoutes(r)         // /api/lists
+	routes.FriendRoutes(r)       // /api/friends
+	routes.NotificationRoutes(r) // /api/notifications
 
 	// 5. Saglik kontrolu endpoint'i
 	r.GET("/", func(c *gin.Context) {

@@ -22,27 +22,40 @@ class ChatService {
     final wsUrl = Uri.parse('ws://10.0.2.2:8080/ws/chat/$roomId?token=$token');
 
     try {
-      _channel = WebSocketChannel.connect(wsUrl);
+      final channel = WebSocketChannel.connect(wsUrl);
+      _channel = channel;
 
-      _channel!.stream.listen(
-        (message) {
-          try {
-            final decoded = jsonDecode(message) as Map<String, dynamic>;
-            _messageController.add(decoded);
-          } catch (e) {
-            debugPrint('Error decoding WebSocket message: $e');
-          }
-        },
-        onError: (error) {
-          debugPrint('WebSocket Hatası: $error');
-        },
-        onDone: () {
-          debugPrint('WebSocket Bağlantısı Koptu');
+      channel.ready.then((_) {
+        if (_channel != channel) return;
+
+        channel.stream.listen(
+          (message) {
+            try {
+              final decoded = jsonDecode(message) as Map<String, dynamic>;
+              _messageController.add(decoded);
+            } catch (e) {
+              debugPrint('Error decoding WebSocket message: $e');
+            }
+          },
+          onError: (error) {
+            debugPrint('WebSocket Hatası: $error');
+          },
+          onDone: () {
+            debugPrint('WebSocket Bağlantısı Koptu');
+            if (_channel == channel) {
+              _channel = null;
+            }
+          },
+        );
+      }).catchError((error) {
+        debugPrint('WebSocket Bağlantı Hatası: $error');
+        if (_channel == channel) {
           _channel = null;
-        },
-      );
+        }
+      });
     } catch (e) {
       debugPrint('WebSocket Bağlantı Hatası: $e');
+      _channel = null;
     }
   }
 

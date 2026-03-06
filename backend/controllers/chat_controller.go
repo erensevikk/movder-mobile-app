@@ -3,9 +3,11 @@ package controllers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"movder-backend/config"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +17,7 @@ import (
 	"github.com/gorilla/websocket"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 // ─── WebSocket Yapılandırması ────────────────────────────────
@@ -43,6 +46,14 @@ type ChatMessage struct {
 	Status     string             `json:"status" bson:"status"` // "sent", "delivered", "read"
 }
 
+// WebSocket için temel limit ve timeout ayarları
+const (
+	wsMaxMessageSize         = 64 * 1024        // 64KB
+	wsReadTimeout            = 60 * time.Second // Pong gelmezse 60 saniye içinde bağlantıyı kapat
+	wsWriteTimeout           = 10 * time.Second // Yavaş client için yazma süresi limiti
+	wsMaxConnsPerUserPerRoom = 5                // Aynı odada bir kullanıcı için en fazla eşzamanlı bağlantı
+)
+
 // HandleWebSocket — WebSocket bağlantı handler'ı
 // /ws/chat/:roomId?token=xxx şeklinde çağrılır
 func HandleWebSocket() gin.HandlerFunc {
@@ -62,9 +73,18 @@ func HandleWebSocket() gin.HandlerFunc {
 			return
 		}
 
-		// 2. Oda var mı kontrol et (Redis'te)
+		// 2. Oda var mı ve kullanıcı bu odaya dahil mi kontrol et (MongoDB)
+		// Redis "chatroom:*" anahtarı geçici TTL ile silinebildiği için
+		// kalıcı kaynak olan chatrooms koleksiyonunu esas alıyoruz.
 		ctx := context.Background()
-		_, err = config.RedisClient.Get(ctx, "chatroom:"+roomID).Result()
+		roomsCol := config.GetCollection(config.DB, "chatrooms")
+		err = roomsCol.FindOne(ctx, bson.M{
+			"roomId": roomID,
+			"$or": bson.A{
+				bson.M{"user1Id": userId},
+				bson.M{"user2Id": userId},
+			},
+		}).Err()
 		if err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Sohbet odası bulunamadı"})
 			return
@@ -96,8 +116,10 @@ func HandleWebSocket() gin.HandlerFunc {
 		for {
 			_, msg, err := conn.ReadMessage()
 			if err != nil {
-				break // Bağlantı koptu
+				break // Bağlantı koptu veya timeout oluştu
 			}
+			// Her başarılı okuma sonrası read deadline'ı yenile
+			_ = conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
 
 			// Gelen mesaj yapısını parse et
 			var incoming struct {
@@ -133,9 +155,21 @@ func HandleWebSocket() gin.HandlerFunc {
 				continue
 			}
 
-			// Status belirle: Karşı taraf websocket ile bağlıysa delivered, değilse sent.
-			// read statüsü yalnızca read_receipt ile verilmelidir.
-			msgStatus := "sent"
+			// Eşleşme iptal edilmişse mesaj göndermeyi engelle
+			checkCtx, checkCancel := context.WithTimeout(context.Background(), 3*time.Second)
+			var roomStatus struct {
+				Status string `bson:"status"`
+			}
+			if err := config.GetCollection(config.DB, "chatrooms").FindOne(checkCtx, bson.M{"roomId": roomID}).Decode(&roomStatus); err == nil && roomStatus.Status == "unmatched" {
+				checkCancel()
+				log.Printf("🚫 message blocked — room %s is unmatched, sender=%s", roomID, userId)
+				continue
+			}
+			checkCancel()
+
+			// Mesaj sunucuya ulaştıysa 'delivered' olarak kaydedilir.
+			// 'read' statüsü yalnızca read_receipt ile verilir.
+			msgStatus := "delivered"
 			chatMu.RLock()
 			roomUsers := chatRooms[roomID]
 
@@ -147,21 +181,9 @@ func HandleWebSocket() gin.HandlerFunc {
 					break
 				}
 			}
-
-			receiverConnCount := 0
-			if receiverId != "" {
-				receiverConnCount = len(roomUsers[receiverId])
-			}
 			chatMu.RUnlock()
 
-			// delivered: alıcıya ait en az bir aktif bağlantı varsa
-			// read: sadece read_receipt ile set edilir
-			if receiverConnCount > 0 {
-				msgStatus = "delivered"
-			} else {
-				msgStatus = "sent"
-			}
-			log.Printf("📨 status-eval room=%s sender=%s receiver=%s receiverConns=%d status=%s", roomID, userId, receiverId, receiverConnCount, msgStatus)
+			log.Printf("📨 status-eval room=%s sender=%s receiver=%s status=%s", roomID, userId, receiverId, msgStatus)
 
 			// NOT: Eğer karşı taraf odada yoksa, receiverId'yi chatrooms koleksiyonundan da çekebiliriz (fallback)
 			// Ancak şema sadece "messages" olduğu için, aslında eşleşmeden dönen targetUserId'yi client bize ws ile "receiverId" olarak iletebilir.
@@ -219,7 +241,7 @@ func validateWSToken(tokenStr string) (string, string, error) {
 	return userId, username, nil
 }
 
-func joinRoom(roomID, userId string, conn *websocket.Conn) {
+func joinRoom(roomID, userId string, conn *websocket.Conn) bool {
 	chatMu.Lock()
 	defer chatMu.Unlock()
 
@@ -229,8 +251,16 @@ func joinRoom(roomID, userId string, conn *websocket.Conn) {
 	if chatRooms[roomID][userId] == nil {
 		chatRooms[roomID][userId] = make(map[*websocket.Conn]bool)
 	}
+
+	// Aynı kullanıcı için bağlantı limiti kontrolü
+	if len(chatRooms[roomID][userId]) >= wsMaxConnsPerUserPerRoom {
+		log.Printf("⚠️ WS per-user connection limit reached room=%s userId=%s", roomID, userId)
+		return false
+	}
+
 	chatRooms[roomID][userId][conn] = true
 	log.Printf("👤 %s odaya katıldı: %s (userConnCount=%d roomUserCount=%d)", userId, roomID, len(chatRooms[roomID][userId]), len(chatRooms[roomID]))
+	return true
 }
 
 func leaveRoom(roomID, userId string, conn *websocket.Conn) {
@@ -279,8 +309,11 @@ func broadcastToRoom(roomID string, msg ChatMessage) {
 
 	msgJSON, _ := json.Marshal(msg)
 	for _, conn := range conns {
+		// Yavaş client'lar için write timeout uygula
+		_ = conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
 		if err := conn.WriteMessage(websocket.TextMessage, msgJSON); err != nil {
 			log.Printf("⚠️ broadcast write failed room=%s type=%s err=%v", roomID, msg.Type, err)
+			_ = conn.Close()
 		}
 	}
 }
@@ -323,6 +356,27 @@ func markMessagesAsRead(roomID string, userId string) {
 	}()
 }
 
+// findChatRoomIDBetweenUsers - iki kullanıcı arasındaki mevcut sohbet odasını bulur.
+// Oda yoksa boş string döner.
+func findChatRoomIDBetweenUsers(ctx context.Context, userA, userB string) (string, error) {
+	roomsCol := config.GetCollection(config.DB, "chatrooms")
+	var room struct {
+		RoomID string `bson:"roomId"`
+	}
+
+	err := roomsCol.FindOne(ctx, bson.M{
+		"$or": bson.A{
+			bson.M{"user1Id": userA, "user2Id": userB},
+			bson.M{"user1Id": userB, "user2Id": userA},
+		},
+	}).Decode(&room)
+	if err != nil {
+		return "", err
+	}
+
+	return room.RoomID, nil
+}
+
 // GetChatRooms — Kullanıcının katıldığı sohbet odalarını listeler (son mesaj dahil)
 // GET /api/chat/rooms
 func GetChatRooms() gin.HandlerFunc {
@@ -351,23 +405,91 @@ func GetChatRooms() gin.HandlerFunc {
 		defer cursor.Close(ctx)
 
 		type RoomDoc struct {
-			RoomID    string `bson:"roomId"`
-			User1ID   string `bson:"user1Id"`
-			User2ID   string `bson:"user2Id"`
-			MovieName string `bson:"movieName"`
-			PosterURL string `bson:"posterUrl"`
+			RoomID      string `bson:"roomId"`
+			User1ID     string `bson:"user1Id"`
+			User2ID     string `bson:"user2Id"`
+			MovieName   string `bson:"movieName"`
+			PosterURL   string `bson:"posterUrl"`
+			Status      string `bson:"status"`
+			UnmatchedBy string `bson:"unmatchedBy"`
+		}
+
+		// Tüm odaları hafızaya al (N adet room dokümanı)
+		var rooms []RoomDoc
+		if err := cursor.All(ctx, &rooms); err != nil {
+			log.Printf("🔎 GetChatRooms rooms cursor.All failed userId=%s err=%v", userId, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Sohbet odaları alınamadı"})
+			return
+		}
+
+		if len(rooms) == 0 {
+			c.JSON(http.StatusOK, []map[string]interface{}{})
+			return
+		}
+
+		// Karşı kullanıcıları tek seferde çekmek için userId set'i
+		userIDSet := make(map[string]struct{})
+		for _, room := range rooms {
+			otherUserId := room.User2ID
+			if room.User2ID == userId {
+				otherUserId = room.User1ID
+			}
+			if strings.TrimSpace(otherUserId) == "" {
+				continue
+			}
+			userIDSet[otherUserId] = struct{}{}
+		}
+
+		// Hex -> ObjectID map ve toplu kullanıcı sorgusu
+		hexToObjID := make(map[string]primitive.ObjectID)
+		var userObjIDs []primitive.ObjectID
+		for hexID := range userIDSet {
+			objID, err := primitive.ObjectIDFromHex(hexID)
+			if err != nil {
+				log.Printf("🔎 GetChatRooms invalid otherUserId for preload userId=%s otherUserId=%q err=%v", userId, hexID, err)
+				continue
+			}
+			hexToObjID[hexID] = objID
+			userObjIDs = append(userObjIDs, objID)
+		}
+
+		// Kullanıcıları tek seferde çek ve map'e al
+		type userBrief struct {
+			Username  string `bson:"username"`
+			AvatarURL string `bson:"avatar_url"`
+		}
+		userMap := make(map[primitive.ObjectID]userBrief)
+		if len(userObjIDs) > 0 {
+			userCursor, err := usersCol.Find(ctx, bson.M{"_id": bson.M{"$in": userObjIDs}})
+			if err != nil {
+				log.Printf("🔎 GetChatRooms users bulk lookup failed userId=%s err=%v", userId, err)
+			} else {
+				for userCursor.Next(ctx) {
+					var u struct {
+						ID        primitive.ObjectID `bson:"_id"`
+						Username  string             `bson:"username"`
+						AvatarURL string             `bson:"avatar_url"`
+					}
+					if err := userCursor.Decode(&u); err != nil {
+						continue
+					}
+					userMap[u.ID] = userBrief{Username: u.Username, AvatarURL: u.AvatarURL}
+				}
+				userCursor.Close(ctx)
+			}
 		}
 
 		var result []map[string]interface{}
-
 		var roomCount int
 		var emptyAvatarCount int
 		var emptyMovieCount int
-		for cursor.Next(ctx) {
-			var room RoomDoc
-			if err := cursor.Decode(&room); err != nil {
-				log.Printf("🔎 GetChatRooms decode room failed userId=%s err=%v", userId, err)
-				continue
+
+		for _, room := range rooms {
+			// Kullanıcı bu odayı gizlediyse: hide timestamp'i al
+			hiddenKey := "chat:hidden:" + userId
+			var hideTS int64
+			if tsStr, err := config.RedisClient.HGet(ctx, hiddenKey, room.RoomID).Result(); err == nil {
+				hideTS, _ = strconv.ParseInt(tsStr, 10, 64)
 			}
 			roomCount++
 
@@ -377,63 +499,51 @@ func GetChatRooms() gin.HandlerFunc {
 				otherUserId = room.User1ID
 			}
 
-			// Karşı kullanıcı bilgilerini çek
-			otherObjID, objErr := primitive.ObjectIDFromHex(otherUserId)
-			var otherUser struct {
-				Username  string `bson:"username"`
-				AvatarURL string `bson:"avatar_url"`
-			}
-			if objErr != nil {
-				log.Printf("🔎 GetChatRooms invalid otherUserId roomId=%s userId=%s otherUserId=%q err=%v", room.RoomID, userId, otherUserId, objErr)
-			} else {
-				if err := usersCol.FindOne(ctx, bson.M{"_id": otherObjID}).Decode(&otherUser); err != nil {
-					log.Printf("🔎 GetChatRooms users lookup failed roomId=%s userId=%s otherUserId=%s err=%v", room.RoomID, userId, otherUserId, err)
+			// Karşı kullanıcı bilgilerini bulk map'ten çek
+			var otherUser userBrief
+			if objID, ok := hexToObjID[otherUserId]; ok {
+				if u, found := userMap[objID]; found {
+					otherUser = u
+				} else {
+					log.Printf("🔎 GetChatRooms user not found in userMap roomId=%s userId=%s targetUserId=%s", room.RoomID, userId, otherUserId)
 				}
+			} else if otherUserId != "" {
+				// Hex parse edilemediyse yine logla (preload aşamasında da loglanmış olabilir)
+				log.Printf("🔎 GetChatRooms missing hexToObjID mapping roomId=%s userId=%s targetUserId=%s", room.RoomID, userId, otherUserId)
 			}
 
-			// Bu odanın son mesajını çek
+			// Bu odanın son mesajını çek: timestamp DESC, limit 1
 			var lastMsg struct {
 				Content   string `bson:"content"`
 				Timestamp int64  `bson:"timestamp"`
 				SenderID  string `bson:"senderId"`
 				Status    string `bson:"status"`
 			}
-			opts := map[string]interface{}{}
-			_ = opts
-			msgCursor, msgFindErr := msgsCol.Find(ctx,
-				bson.M{"roomId": room.RoomID, "type": "message"},
-			)
-			if msgFindErr != nil {
-				log.Printf("🔎 GetChatRooms message lookup failed roomId=%s err=%v", room.RoomID, msgFindErr)
+			msgFilter := bson.M{"roomId": room.RoomID, "type": "message"}
+			if hideTS > 0 {
+				msgFilter["timestamp"] = bson.M{"$gt": hideTS}
 			}
-			var lastMsgFound bool
-			var latestTimestamp int64
-			for msgCursor != nil && msgCursor.Next(ctx) {
-				var m struct {
-					Content   string `bson:"content"`
-					Timestamp int64  `bson:"timestamp"`
-					SenderID  string `bson:"senderId"`
-					Status    string `bson:"status"`
-				}
-				if err := msgCursor.Decode(&m); err != nil {
-					continue
-				}
-				if m.Timestamp > latestTimestamp {
-					latestTimestamp = m.Timestamp
-					lastMsg = m
-					lastMsgFound = true
-				}
-			}
-			if msgCursor != nil {
-				msgCursor.Close(ctx)
+			lastMsgFound := false
+			findOpts := options.FindOne().SetSort(bson.D{{Key: "timestamp", Value: -1}})
+			if err := msgsCol.FindOne(ctx, msgFilter, findOpts).Decode(&lastMsg); err == nil {
+				lastMsgFound = true
 			}
 
-			// Okunmamış mesaj sayısı
-			unreadCount, _ := msgsCol.CountDocuments(ctx, bson.M{
+			// Gizlenmiş oda ama sonrasında mesaj yoksa listeye ekleme
+			if hideTS > 0 && !lastMsgFound {
+				continue
+			}
+
+			// Okunmamış mesaj sayısı (hide timestamp filtresiyle)
+			unreadFilter := bson.M{
 				"roomId":   room.RoomID,
 				"senderId": bson.M{"$ne": userId},
 				"status":   bson.M{"$in": []string{"sent", "delivered"}},
-			})
+			}
+			if hideTS > 0 {
+				unreadFilter["timestamp"] = bson.M{"$gt": hideTS}
+			}
+			unreadCount, _ := msgsCol.CountDocuments(ctx, unreadFilter)
 
 			entry := map[string]interface{}{
 				"roomId":        room.RoomID,
@@ -446,6 +556,8 @@ func GetChatRooms() gin.HandlerFunc {
 				"unreadCount":   unreadCount,
 				"lastMessage":   "",
 				"lastTimestamp": int64(0),
+				"status":        room.Status,
+				"unmatchedBy":   room.UnmatchedBy,
 			}
 
 			if strings.TrimSpace(otherUser.AvatarURL) == "" {
@@ -454,7 +566,7 @@ func GetChatRooms() gin.HandlerFunc {
 			if strings.TrimSpace(room.MovieName) == "" {
 				emptyMovieCount++
 			}
-			log.Printf("🔎 GetChatRooms roomId=%s targetUserId=%s username=%q avatarEmpty=%t movieEmpty=%t posterEmpty=%t unread=%d", room.RoomID, otherUserId, otherUser.Username, strings.TrimSpace(otherUser.AvatarURL) == "", strings.TrimSpace(room.MovieName) == "", strings.TrimSpace(room.PosterURL) == "", unreadCount)
+			log.Printf("🔎 GetChatRooms roomId=%s targetUserId=%s status=%q username=%q avatarEmpty=%t movieEmpty=%t posterEmpty=%t unread=%d", room.RoomID, otherUserId, room.Status, otherUser.Username, strings.TrimSpace(otherUser.AvatarURL) == "", strings.TrimSpace(room.MovieName) == "", strings.TrimSpace(room.PosterURL) == "", unreadCount)
 
 			if lastMsgFound {
 				entry["lastMessage"] = lastMsg.Content
@@ -477,13 +589,21 @@ func GetChatRooms() gin.HandlerFunc {
 // GET /api/chat/rooms/:roomId/messages?limit=50
 func GetChatMessages() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userId := c.GetString("userId")
-		roomID := c.Param("roomId")
-
-		// Kullanıcının bu odada yetkisi var mı?
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel, _ := requestContext(c)
 		defer cancel()
 
+		userId, ok := mustUserID(c)
+		if !ok {
+			return
+		}
+		roomID := c.Param("roomId")
+		if strings.TrimSpace(roomID) == "" {
+			// roomId path param eksik veya boş
+			errorResponse(c, http.StatusBadRequest, "INVALID_ROOM_ID", "Geçerli bir roomId gerekli", nil)
+			return
+		}
+
+		// Kullanıcının bu odada yetkisi var mı?
 		roomsCol := config.GetCollection(config.DB, "chatrooms")
 		var room struct {
 			User1ID string `bson:"user1Id"`
@@ -497,16 +617,24 @@ func GetChatMessages() gin.HandlerFunc {
 			},
 		}).Decode(&room)
 		if err != nil {
-			c.JSON(http.StatusForbidden, gin.H{"error": "Bu odaya erişim yetkiniz yok"})
+			// Odaya erişim yetkisi yok
+			errorResponse(c, http.StatusForbidden, "FORBIDDEN", "Bu odaya erişim yetkiniz yok", nil)
 			return
 		}
 
 		msgsCol := config.GetCollection(config.DB, "messages")
-		cursor, err := msgsCol.Find(ctx,
-			bson.M{"roomId": roomID, "type": "message"},
-		)
+		// Kullanıcı bu odayı gizlediyse, sadece gizleme sonrası mesajları göster
+		msgFilter := bson.M{"roomId": roomID, "type": "message"}
+		hiddenKey := "chat:hidden:" + userId
+		if tsStr, err := config.RedisClient.HGet(ctx, hiddenKey, roomID).Result(); err == nil {
+			if hideTS, parseErr := strconv.ParseInt(tsStr, 10, 64); parseErr == nil && hideTS > 0 {
+				msgFilter["timestamp"] = bson.M{"$gt": hideTS}
+			}
+		}
+		cursor, err := msgsCol.Find(ctx, msgFilter)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Mesajlar alınamadı"})
+			// Mesajlar çekilirken hata oluştu
+			errorResponse(c, http.StatusInternalServerError, "MESSAGES_QUERY_FAILED", "Mesajlar alınamadı", err.Error())
 			return
 		}
 		defer cursor.Close(ctx)
@@ -535,5 +663,53 @@ func GetChatMessages() gin.HandlerFunc {
 		}
 
 		c.JSON(http.StatusOK, messages)
+	}
+}
+
+// HideChatRoom - bir sohbeti sadece isteği atan kullanıcı için gizler.
+// DELETE /api/chat/rooms/:roomId
+func HideChatRoom() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userId := c.GetString("userId")
+		roomID := c.Param("roomId")
+		log.Printf("🧪 CHAT-DELETE-DBG start userId=%s roomId=%s", userId, roomID)
+		if roomID == "" {
+			log.Printf("🧪 CHAT-DELETE-DBG bad-request userId=%s roomId-empty", userId)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "roomId gerekli"})
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		roomsCol := config.GetCollection(config.DB, "chatrooms")
+		err := roomsCol.FindOne(ctx, bson.M{
+			"roomId": roomID,
+			"$or": bson.A{
+				bson.M{"user1Id": userId},
+				bson.M{"user2Id": userId},
+			},
+		}).Err()
+		if err != nil {
+			log.Printf("🧪 CHAT-DELETE-DBG forbidden userId=%s roomId=%s err=%v", userId, roomID, err)
+			c.JSON(http.StatusForbidden, gin.H{"error": "Bu odayı gizleme yetkiniz yok"})
+			return
+		}
+
+		hiddenKey := "chat:hidden:" + userId
+		// Eski SET tipli key varsa WRONGTYPE hatasını önlemek için sil
+		if keyType, err := config.RedisClient.Type(ctx, hiddenKey).Result(); err == nil && keyType == "set" {
+			config.RedisClient.Del(ctx, hiddenKey)
+		}
+		now := time.Now().Unix()
+		if _, err := config.RedisClient.HSet(ctx, hiddenKey, roomID, fmt.Sprintf("%d", now)).Result(); err != nil {
+			log.Printf("🧪 CHAT-DELETE-DBG redis-hset-failed userId=%s roomId=%s key=%s err=%v", userId, roomID, hiddenKey, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Sohbet gizlenemedi"})
+			return
+		}
+		_ = config.RedisClient.Expire(ctx, hiddenKey, 180*24*time.Hour).Err()
+		log.Printf("🧪 CHAT-DELETE-DBG success userId=%s roomId=%s key=%s hideTS=%d", userId, roomID, hiddenKey, now)
+
+		c.JSON(http.StatusOK, gin.H{"message": "Sohbet gizlendi"})
 	}
 }

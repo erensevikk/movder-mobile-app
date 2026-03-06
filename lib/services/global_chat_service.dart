@@ -35,6 +35,7 @@ class GlobalChatService {
 
   bool _initialized = false;
   bool _isChatListVisible = false;
+  bool _isAppInForeground = true;
 
   // Chat list ekranı anlık güncelleyebilsin diye oda bazlı message event yayını
   final StreamController<String> _messageEventsController =
@@ -76,20 +77,34 @@ class GlobalChatService {
       final channel = WebSocketChannel.connect(wsUrl);
       _channels[roomId] = channel;
 
-      final sub = channel.stream.listen(
-        (raw) => _onMessage(roomId, raw),
-        onError: (e) {
-          debugPrint('[GlobalChat] $roomId hata: $e');
-          _reconnectLater(roomId);
-        },
-        onDone: () {
-          debugPrint('[GlobalChat] $roomId bağlantısı kapandı');
-          _reconnectLater(roomId);
-        },
-      );
-      _subscriptions[roomId] = sub;
+      channel.ready.then((_) {
+        // Bu arada oda kaldırıldıysa artık dinleme başlatma.
+        if (!_initialized || _channels[roomId] != channel) return;
+
+        final sub = channel.stream.listen(
+          (raw) => _onMessage(roomId, raw),
+          onError: (e) {
+            debugPrint('[GlobalChat] $roomId hata: $e');
+            _reconnectLater(roomId);
+          },
+          onDone: () {
+            debugPrint('[GlobalChat] $roomId bağlantısı kapandı');
+            _reconnectLater(roomId);
+          },
+        );
+        _subscriptions[roomId] = sub;
+      }).catchError((e) {
+        debugPrint('[GlobalChat] $roomId bağlanılamadı: $e');
+        if (_channels[roomId] == channel) {
+          _channels.remove(roomId);
+        }
+        _subscriptions[roomId]?.cancel();
+        _subscriptions.remove(roomId);
+        _reconnectLater(roomId);
+      });
     } catch (e) {
       debugPrint('[GlobalChat] $roomId bağlanılamadı: $e');
+      _reconnectLater(roomId);
     }
   }
 
@@ -134,12 +149,11 @@ class GlobalChatService {
   void _reconnectLater(String roomId) {
     if (!_initialized) return;
     Future.delayed(const Duration(seconds: 5), () {
-      if (_initialized && _channels.containsKey(roomId)) {
-        _channels.remove(roomId);
-        _subscriptions[roomId]?.cancel();
-        _subscriptions.remove(roomId);
-        _connectRoom(roomId);
-      }
+      if (!_initialized) return;
+      _channels.remove(roomId);
+      _subscriptions[roomId]?.cancel();
+      _subscriptions.remove(roomId);
+      _connectRoom(roomId);
     });
   }
 
@@ -165,11 +179,48 @@ class GlobalChatService {
     _connectRoom(roomId);
   }
 
+  /// Belirli bir odayı global dinlemeden çıkarır.
+  void removeRoom(String roomId) {
+    _roomMeta.remove(roomId);
+    _subscriptions[roomId]?.cancel();
+    _subscriptions.remove(roomId);
+    final channel = _channels.remove(roomId);
+    channel?.sink.close();
+  }
+
   /// Bottom navigation'da sohbetler sekmesinin görünürlüğünü bildirir.
   void setChatListVisible(bool value) {
     _isChatListVisible = value;
   }
-
+ 
+  /// Uygulama yaşam döngüsünü ana ekrandan bildirir.
+  /// Arka plana geçince tüm WS bağlantıları kapatılır, ön plana gelince tekrar bağlanılır.
+  void handleAppLifecycle(bool isForeground) {
+    if (_isAppInForeground == isForeground) return;
+    _isAppInForeground = isForeground;
+ 
+    if (isForeground) {
+      if (!AuthService.isLoggedIn) return;
+      _initialized = true;
+      // Oda metaları duruyorsa ve aktif bağlantı yoksa yeniden bağlan.
+      for (final roomId in _roomMeta.keys) {
+        if (!_channels.containsKey(roomId)) {
+          _connectRoom(roomId);
+        }
+      }
+    } else {
+      // Arka plana geçince sadece bağlantıları kapat, meta bilgiyi koru.
+      for (final sub in _subscriptions.values) {
+        sub.cancel();
+      }
+      _subscriptions.clear();
+      for (final ch in _channels.values) {
+        ch.sink.close();
+      }
+      _channels.clear();
+    }
+  }
+ 
   Stream<String> get messageEvents => _messageEventsController.stream;
 
   Future<void> dispose() async {

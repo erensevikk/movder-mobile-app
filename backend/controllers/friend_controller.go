@@ -103,6 +103,7 @@ func SendFriendRequest() gin.HandlerFunc {
 			}
 
 			log.Printf("[FRIEND] Karşılıklı onay! %s ↔ %s artık arkadaş", fromIDStr, input.TargetUserID)
+			notifyFriendStatusChanged(fromIDStr, input.TargetUserID)
 			c.JSON(http.StatusOK, gin.H{
 				"status":  "friends",
 				"message": "Artık arkadaşsınız! 🎉",
@@ -124,6 +125,21 @@ func SendFriendRequest() gin.HandlerFunc {
 		}
 
 		log.Printf("[FRIEND] Pending istek: %s → %s", fromIDStr, input.TargetUserID)
+
+		// Bildirim ekle
+		notifCol := config.GetCollection(config.DB, "notifications")
+		_, _ = notifCol.InsertOne(ctx, bson.M{
+			"userId":    input.TargetUserID,
+			"type":      "friend_request",
+			"senderId":  fromIDStr,
+			"title":     "Yeni Arkadaşlık İsteği",
+			"message":   fromUser.Username + " sana arkadaşlık isteği gönderdi.",
+			"avatar":    fromUser.AvatarURL,
+			"isRead":    false,
+			"createdAt": time.Now(),
+		})
+
+		notifyFriendStatusChanged(fromIDStr, input.TargetUserID)
 		c.JSON(http.StatusCreated, gin.H{
 			"status":  "pending",
 			"message": "Arkadaşlık isteği gönderildi! Karşı taraf da onaylarsa arkadaş olacaksınız.",
@@ -219,8 +235,35 @@ func RemoveFriend() gin.HandlerFunc {
 			},
 		})
 
+		notifyFriendStatusChanged(userIDStr, friendIDStr)
 		c.JSON(http.StatusOK, gin.H{"message": "Arkadaşlıktan çıkarıldı"})
 	}
+}
+
+// notifyFriendStatusChanged - iki kullanıcı arasındaki aktif sohbet odasına
+// friend_status_changed olayı yollar; chat içindeki butonlar anında güncellenir.
+func notifyFriendStatusChanged(userA, userB string) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		roomID, err := findChatRoomIDBetweenUsers(ctx, userA, userB)
+		if err != nil {
+			return
+		}
+		if roomID == "" {
+			return
+		}
+
+		msg := ChatMessage{
+			Type:       "friend_status_changed",
+			RoomID:     roomID,
+			SenderID:   userA,
+			ReceiverID: userB,
+			Timestamp:  time.Now().Unix(),
+		}
+		broadcastToRoom(roomID, msg)
+	}()
 }
 
 // GetFriendStatus — İki kullanıcı arasındaki arkadaşlık durumunu döner

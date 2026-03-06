@@ -17,5 +17,6 @@ func ChatRoutes(r *gin.Engine) {
 	{
 		protected.GET("/rooms", controllers.GetChatRooms())
 		protected.GET("/rooms/:roomId/messages", controllers.GetChatMessages())
+		protected.DELETE("/rooms/:roomId", controllers.HideChatRoom())
 	}
 }

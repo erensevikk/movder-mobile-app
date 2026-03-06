@@ -20,6 +20,8 @@ import (
 type MatchRequest struct {
 	UserID    string `json:"userId"`
 	Username  string `json:"username"`
+	City      string `json:"city"`
+	LocalOnly bool   `json:"localOnly"`
 	TmdbID    int    `json:"tmdbId"`
 	MovieName string `json:"movieName"`
 	Timestamp int64  `json:"timestamp"`
@@ -80,9 +82,21 @@ func PublishMatchRequest(req MatchRequest) error {
 }
 
 // CheckForMatch — Eşleşme olup olmadığını RabbitMQ kuyruğuna bakarak kontrol eder
-func CheckForMatch(userId string, tmdbID int) (*MatchResult, error) {
+func CheckForMatch(userId string, tmdbID int, localOnly bool) (*MatchResult, error) {
 	ctx := context.Background()
 	userCol := config.GetCollection(config.DB, "users")
+
+	// Kullanıcı başına aktif arama lock'u (aynı anda birden fazla CheckForMatch çalışmasın)
+	lockKey := fmt.Sprintf("match_lock:%s:%d", userId, tmdbID)
+	ok, err := config.RedisClient.SetNX(ctx, lockKey, time.Now().Unix(), 30*time.Second).Result()
+	if err != nil {
+		log.Printf("⚠️ match lock set error userId=%s tmdbId=%d err=%v", userId, tmdbID, err)
+	} else if !ok {
+		// Aynı kullanıcı için bu filmde zaten aktif bir arama var; ekstra yük oluşturmayalım
+		log.Printf("🔁 match already in progress userId=%s tmdbId=%d", userId, tmdbID)
+		return nil, nil
+	}
+	defer config.RedisClient.Del(ctx, lockKey)
 
 	// Kuyruğa girdiğini / aktif beklediğini Redis ZSet ile bildir (Zaman bazlı aktiflik kontrolü)
 	config.RedisClient.ZAdd(ctx, "match_queue_active", redis.Z{
@@ -114,7 +128,7 @@ func CheckForMatch(userId string, tmdbID int) (*MatchResult, error) {
 	queueName := fmt.Sprintf("match_queue_%d", tmdbID)
 
 	// Kuyruğu garanti altına alalım
-	_, err := config.RabbitChannel.QueueDeclare(queueName, false, true, false, false, nil)
+	_, err = config.RabbitChannel.QueueDeclare(queueName, false, true, false, false, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -122,6 +136,7 @@ func CheckForMatch(userId string, tmdbID int) (*MatchResult, error) {
 	// Kendi bilgilerimi al (Unmatched kontrolü ve Publish için)
 	var myUser struct {
 		Username       string               `bson:"username"`
+		City           string               `bson:"city"`
 		UnmatchedUsers []primitive.ObjectID `bson:"unmatched_users"`
 	}
 	myObjID, _ := primitive.ObjectIDFromHex(userId)
@@ -159,6 +174,15 @@ func CheckForMatch(userId string, tmdbID int) (*MatchResult, error) {
 			continue
 		}
 
+		// Kullanıcı bu istekten sonra "iptal" tuşuna bastıysa, kuyruğu kaba temizlemek yerine
+		// iptal flag'ine bakarak sadece ilgili mesajı düşük maliyetle çöpe atıyoruz.
+		cancelKey := fmt.Sprintf("match_cancelled:%s:%d", req.UserID, req.TmdbID)
+		if val, err := config.RedisClient.Get(ctx, cancelKey).Result(); err == nil && val == "1" {
+			// Bu istek iptal edilmiş, kalıcı olarak sil
+			_ = config.RabbitChannel.Ack(msg.DeliveryTag, false)
+			continue
+		}
+
 		if req.UserID == userId {
 			sawMyself = true
 			// HATA DÜZELTME: Kendi mesajımızı tekrar kuyruğa koymak (nack) yerine,
@@ -182,6 +206,17 @@ func CheckForMatch(userId string, tmdbID int) (*MatchResult, error) {
 			continue
 		}
 
+		// Aynı şehir filtresi:
+		// Taraflardan biri "şehrimde ara" modundaysa şehirler birebir eşleşmeli.
+		if localOnly || req.LocalOnly {
+			myCity := strings.TrimSpace(strings.ToLower(myUser.City))
+			targetCity := strings.TrimSpace(strings.ToLower(req.City))
+			if myCity == "" || targetCity == "" || myCity != targetCity {
+				nackedTags = append(nackedTags, msg.DeliveryTag)
+				continue
+			}
+		}
+
 		// Öncelikli Eşleşme (History-Based Matching)
 		// Daha önce unmatch yapılmış mı?
 		unmatchedPrior := false
@@ -202,7 +237,7 @@ func CheckForMatch(userId string, tmdbID int) (*MatchResult, error) {
 		// Random yerine zaman damgası / math.rand kullanabiliriz.
 		// math/rand kütüphanesini kullanmamız lazım. Time bazlı random:
 		randVal := time.Now().UnixNano() % 100 // 0-99 arası
-		threshold := int64(50)                 // No history = 50%
+		threshold := int64(50)                // No history = 50%
 		if unmatchedPrior {
 			threshold = 25 // History = 25% chance
 		}
@@ -227,7 +262,7 @@ func CheckForMatch(userId string, tmdbID int) (*MatchResult, error) {
 		// Mesajı tüket
 		_ = config.RabbitChannel.Ack(matchDeliveryTag, false)
 
-		roomID := fmt.Sprintf("room_%s_%s_%d", userId, matchedReq.UserID, time.Now().UnixMilli())
+		roomID := primitive.NewObjectID().Hex()
 
 		result := &MatchResult{
 			RoomID:    roomID,
@@ -259,6 +294,8 @@ func CheckForMatch(userId string, tmdbID int) (*MatchResult, error) {
 		req := MatchRequest{
 			UserID:    userId,
 			Username:  myUser.Username,
+			City:      myUser.City,
+			LocalOnly: localOnly,
 			TmdbID:    tmdbID,
 			MovieName: myStatus.MovieName,
 			Timestamp: time.Now().Unix(),
@@ -269,44 +306,22 @@ func CheckForMatch(userId string, tmdbID int) (*MatchResult, error) {
 	return nil, nil
 }
 
-// CancelMatchRequest — Eşleşme aramasını iptal eder ve kuyruktaki isteğini temizler
+// CancelMatchRequest — Eşleşme aramasını iptal eder.
+// Kuyruk taramak yerine, "cancel marker" yazarız; tüketim sırasında bu flag'e bakılıp
+// ilgili mesajlar düşük maliyetle ayıklanır.
 func CancelMatchRequest(userId string, tmdbID int) error {
-	queueName := fmt.Sprintf("match_queue_%d", tmdbID)
+	ctx := context.Background()
 
-	var nackedTags []uint64
-
-	for i := 0; i < 50; i++ {
-		msg, ok, err := config.RabbitChannel.Get(queueName, false)
-		if err != nil || !ok {
-			break
-		}
-
-		var req MatchRequest
-		if err := json.Unmarshal(msg.Body, &req); err != nil {
-			config.RabbitChannel.Nack(msg.DeliveryTag, false, false) // discard bad
-			continue
-		}
-
-		if req.UserID == userId {
-			// Kendi mesajımız, siliyoruz
-			_ = config.RabbitChannel.Ack(msg.DeliveryTag, false)
-			// HATA DÜZELTME: break yapmıyoruz, çünkü kullanıcı art arda basmış ve
-			// kuyrukta birden fazla kendi mesajı birikmiş olabilir. Hepsini siliyoruz.
-		} else {
-			// Başkasının mesajı, sonradan iade edeceğiz
-			nackedTags = append(nackedTags, msg.DeliveryTag)
-		}
-	}
-
-	// İade et
-	for _, tag := range nackedTags {
-		_ = config.RabbitChannel.Nack(tag, false, true)
+	// Bu kullanıcının bu film için aktif talebinin iptal edildiğini işaretle
+	cancelKey := fmt.Sprintf("match_cancelled:%s:%d", userId, tmdbID)
+	if err := config.RedisClient.Set(ctx, cancelKey, "1", 2*time.Minute).Err(); err != nil {
+		log.Printf("⚠️ match cancel marker set failed userId=%s tmdbId=%d err=%v", userId, tmdbID, err)
 	}
 
 	// Bekleyenler listesinden çıkar
-	config.RedisClient.ZRem(context.Background(), "match_queue_active", userId)
+	config.RedisClient.ZRem(ctx, "match_queue_active", userId)
 
-	log.Printf("🛑 Eşleşme araması iptal edildi: %s (Kuyruk temizlendi)", userId)
+	log.Printf("🛑 Eşleşme araması iptal edildi: %s (cancel marker yazıldı)", userId)
 	return nil
 }
 
@@ -436,12 +451,37 @@ func getOrCreateChatRoom(ctx context.Context, userId, targetUserId, fallbackRoom
 			User2ID   string `bson:"user2Id"`
 			MovieName string `bson:"movieName"`
 			PosterURL string `bson:"posterUrl"`
+			Status    string `bson:"status"`
 		}
 		if errMeta := col.FindOne(ctx, bson.M{"roomId": existing.RoomID}).Decode(&existingRoomMeta); errMeta != nil {
 			log.Printf("🔎 getOrCreateChatRoom existing room meta read failed roomId=%s err=%v", existing.RoomID, errMeta)
 		} else {
-			log.Printf("🔎 getOrCreateChatRoom reusing existing room roomId=%s user1Id=%s user2Id=%s movieName=%q posterUrlEmpty=%t", existingRoomMeta.RoomID, existingRoomMeta.User1ID, existingRoomMeta.User2ID, existingRoomMeta.MovieName, strings.TrimSpace(existingRoomMeta.PosterURL) == "")
+			log.Printf("🔎 getOrCreateChatRoom reusing existing room roomId=%s user1Id=%s user2Id=%s status=%q movieName=%q posterUrlEmpty=%t", existingRoomMeta.RoomID, existingRoomMeta.User1ID, existingRoomMeta.User2ID, existingRoomMeta.Status, existingRoomMeta.MovieName, strings.TrimSpace(existingRoomMeta.PosterURL) == "")
 		}
+		// Daha önce sohbet edilmiş oda tekrar kullanılıyor.
+		// Eğer geçmişte unmatch nedeniyle status "unmatched" kaldıysa,
+		// yeni eşleşmede aktif sohbeti açabilmek için status'u resetle.
+		if existingRoomMeta.Status == "unmatched" {
+			updateRes, updateErr := col.UpdateOne(
+				ctx,
+				bson.M{"roomId": existing.RoomID},
+				bson.M{
+					"$set": bson.M{
+						"status":    "matched",
+						"updatedAt": time.Now(),
+					},
+					"$unset": bson.M{
+						"unmatchedBy": "",
+						"unmatchedAt": "",
+					},
+				},
+			)
+			_ = updateRes
+			if updateErr != nil {
+				log.Printf("⚠️ getOrCreateChatRoom stale unmatched status reset failed roomId=%s err=%v", existing.RoomID, updateErr)
+			}
+		}
+
 		// Daha önce sohbet edilmiş → aynı odayı döndür
 		return existing.RoomID, nil
 	}
@@ -472,6 +512,45 @@ func getOrCreateChatRoom(ctx context.Context, userId, targetUserId, fallbackRoom
 		log.Printf("🔎 getOrCreateChatRoom insert failed roomId=%s user1Id=%s user2Id=%s movieName=%q err=%v", fallbackRoomID, userId, targetUserId, movieName, insertErr)
 	} else {
 		log.Printf("🔎 getOrCreateChatRoom inserted roomId=%s insertedId=%v movieName=%q posterUrlEmpty=%t", fallbackRoomID, insertRes.InsertedID, movieName, strings.TrimSpace(posterUrl) == "")
+
+		var user1, user2 struct {
+			Username  string `bson:"username"`
+			AvatarURL string `bson:"avatarUrl"`
+		}
+		userCol := config.GetCollection(config.DB, "users")
+
+		objId1, _ := primitive.ObjectIDFromHex(userId)
+		objId2, _ := primitive.ObjectIDFromHex(targetUserId)
+
+		_ = userCol.FindOne(ctx, bson.M{"_id": objId1}).Decode(&user1)
+		_ = userCol.FindOne(ctx, bson.M{"_id": objId2}).Decode(&user2)
+
+		notifCol := config.GetCollection(config.DB, "notifications")
+		messageStr1 := fmt.Sprintf("%s ile %s filmini izlerken eşleştiniz!", user2.Username, movieName)
+		messageStr2 := fmt.Sprintf("%s ile %s filmini izlerken eşleştiniz!", user1.Username, movieName)
+
+		_, _ = notifCol.InsertMany(ctx, []interface{}{
+			bson.M{
+				"userId":    userId,
+				"type":      "match",
+				"senderId":  targetUserId,
+				"title":     "Yeni Eşleşme",
+				"message":   messageStr1,
+				"avatar":    user2.AvatarURL,
+				"isRead":    false,
+				"createdAt": time.Now(),
+			},
+			bson.M{
+				"userId":    targetUserId,
+				"type":      "match",
+				"senderId":  userId,
+				"title":     "Yeni Eşleşme",
+				"message":   messageStr2,
+				"avatar":    user1.AvatarURL,
+				"isRead":    false,
+				"createdAt": time.Now(),
+			},
+		})
 	}
 
 	// Odanın Redis'te zaten var olduğunu varsay (CheckForMatch sırasında yazıldı)

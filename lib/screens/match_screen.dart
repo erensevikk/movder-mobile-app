@@ -15,6 +15,8 @@ class MatchScreen extends StatefulWidget {
 
 class MatchScreenState extends State<MatchScreen>
     with TickerProviderStateMixin {
+  static const Duration _searchPollInterval = Duration(milliseconds: 500);
+
   bool _isScreenVisible = false;
 
   bool _isLocalSearch = false; // false = Genel Arama, true = Aynı Şehirde Arama
@@ -365,7 +367,10 @@ class MatchScreenState extends State<MatchScreen>
     while (keepSearching &&
         context.mounted &&
         currentRequestId == _searchRequestId) {
-      final matchRes = await ApiService.checkMatch(_watchingTmdbId);
+      final matchRes = await ApiService.checkMatch(
+        _watchingTmdbId,
+        localOnly: _isLocalSearch,
+      );
 
       if (!context.mounted || currentRequestId != _searchRequestId) break;
 
@@ -428,7 +433,7 @@ class MatchScreenState extends State<MatchScreen>
           _startDots();
         }
       } else {
-        await Future.delayed(const Duration(seconds: 3));
+        await Future.delayed(_searchPollInterval);
       }
     }
   }
@@ -1254,8 +1259,15 @@ class _MatchFoundOverlayState extends State<MatchFoundOverlay>
       });
       if (elapsed <= 0) {
         timer.cancel();
+        if (_accepted) {
+          setState(() {
+            _progress = 0;
+            _remaining = 0;
+          });
+          return;
+        }
         _pollTimer?.cancel();
-        // Süre bitti → kabul etmiş olsak bile modal kapansın, aramaya devam
+        // Süre bitti ve kullanıcı kabul etmediyse modal kapansın, aramaya devam
         if (mounted) {
           Navigator.of(context).pop(false);
         }
@@ -1359,7 +1371,7 @@ class _MatchFoundOverlayState extends State<MatchFoundOverlay>
     super.dispose();
   }
 
-  Widget _avatarWidget(String? url, String fallbackSeed, double size) {
+  Widget _avatarWidget(String? url, double size) {
     if (url != null && url.isNotEmpty) {
       return ClipOval(
         child: CachedNetworkImage(
@@ -1367,27 +1379,26 @@ class _MatchFoundOverlayState extends State<MatchFoundOverlay>
           width: size,
           height: size,
           fit: BoxFit.cover,
-          errorWidget: (_, __, ___) => _dicebearAvatar(fallbackSeed, size),
-          placeholder: (_, __) => _dicebearAvatar(fallbackSeed, size),
+          errorWidget: (_, __, ___) => _defaultAvatar(size),
+          placeholder: (_, __) => _defaultAvatar(size),
         ),
       );
     }
-    return _dicebearAvatar(fallbackSeed, size);
+    return _defaultAvatar(size);
   }
 
-  Widget _dicebearAvatar(String seed, double size) {
-    return ClipOval(
-      child: Image.network(
-        'https://api.dicebear.com/7.x/avataaars/png?seed=$seed',
-        width: size,
-        height: size,
-        fit: BoxFit.cover,
-        errorBuilder: (_, __, ___) => Container(
-          width: size,
-          height: size,
-          color: const Color(0xFF2A2A2A),
-          child: const Icon(Icons.person, color: Colors.white38),
-        ),
+  Widget _defaultAvatar(double size) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: const BoxDecoration(
+        shape: BoxShape.circle,
+        color: Color(0xFF1E1E1E),
+      ),
+      child: Icon(
+        Icons.person,
+        size: size * 0.52,
+        color: Colors.white54,
       ),
     );
   }
@@ -1472,8 +1483,7 @@ class _MatchFoundOverlayState extends State<MatchFoundOverlay>
                                   ],
                                 ),
                               ),
-                              child: _avatarWidget(
-                                  _myAvatarUrl, widget.myUserId, 80),
+                              child: _avatarWidget(_myAvatarUrl, 80),
                             ),
                             const SizedBox(height: 10),
                             const Text(
@@ -1523,8 +1533,7 @@ class _MatchFoundOverlayState extends State<MatchFoundOverlay>
                                   ],
                                 ),
                               ),
-                              child: _avatarWidget(
-                                  _otherAvatarUrl, widget.targetUserId, 80),
+                              child: _avatarWidget(_otherAvatarUrl, 80),
                             ),
                             const SizedBox(height: 10),
                             Text(

@@ -20,7 +20,9 @@ func CheckMatch() gin.HandlerFunc {
 			return
 		}
 
-		result, err := services.CheckForMatch(userId, tmdbID)
+		localOnly := c.Query("localOnly") == "1" || c.Query("localOnly") == "true"
+
+		result, err := services.CheckForMatch(userId, tmdbID, localOnly)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Eşleşme kontrolü başarısız"})
 			return

@@ -251,6 +251,7 @@ func GetProfile() gin.HandlerFunc {
 			"letterboxdImported": user.LetterboxdImported,
 			"watchHistory":       user.WatchHistory,
 			"createdAt":          user.CreatedAt,
+			"privacySettings":    userPrivacySettings(user),
 		})
 	}
 }
@@ -275,12 +276,21 @@ func SearchUsers() gin.HandlerFunc {
 		}
 
 		userCollection := config.GetCollection(config.DB, "users")
+		var viewer models.User
+		if err := userCollection.FindOne(ctx, bson.M{"_id": userID}).Decode(&viewer); err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Kullanıcı bulunamadı!"})
+			return
+		}
+
+		excludedIDs := append([]primitive.ObjectID{userID}, viewer.BlockedUsers...)
 		filter := bson.M{
-			"_id": bson.M{"$ne": userID},
+			"_id": bson.M{"$nin": excludedIDs},
 			"username": bson.M{
 				"$regex":   regexp.QuoteMeta(query),
 				"$options": "i",
 			},
+			"blocked_users":                        bson.M{"$ne": userID},
+			"privacy_settings.search_discoverable": bson.M{"$ne": false},
 		}
 
 		findOptions := options.Find().
@@ -354,21 +364,29 @@ func GetUserProfile() gin.HandlerFunc {
 
 		isFriend := containsObjectID(viewer.Friends, targetID)
 		isMatched := areUsersMatched(ctx, viewerIDHex, targetIDHex)
-		canSeeWatching := isFriend || isMatched || viewerID == targetID
+		privacy := userPrivacySettings(target)
+		canSeeProfileDetails := canViewerSeeProfileDetails(viewerID, targetID, isFriend, privacy)
+		canSeeWatching := canViewerSeeWatching(viewerIDHex, viewerID, targetID, isFriend, isMatched, privacy)
 
 		response := gin.H{
-			"userId":         target.ID.Hex(),
-			"username":       target.Username,
-			"city":           target.City,
-			"description":    target.Description,
-			"avatarUrl":      target.AvatarURL,
-			"coverUrl":       target.CoverURL,
-			"createdAt":      target.CreatedAt,
-			"isFriend":       isFriend,
-			"isMatched":      isMatched,
-			"canSeeWatching": canSeeWatching,
-			"watchHistory":   target.WatchHistory,
-			"watching":       false,
+			"userId":               target.ID.Hex(),
+			"username":             target.Username,
+			"avatarUrl":            target.AvatarURL,
+			"isFriend":             isFriend,
+			"isMatched":            isMatched,
+			"privacySettings":      privacy,
+			"canSeeProfileDetails": canSeeProfileDetails,
+			"canSeeWatching":       canSeeWatching,
+			"watching":             false,
+		}
+
+		if canSeeProfileDetails {
+			response["city"] = target.City
+			response["description"] = target.Description
+			response["coverUrl"] = target.CoverURL
+			response["createdAt"] = target.CreatedAt
+			response["watchHistory"] = target.WatchHistory
+			response["letterboxdImported"] = target.LetterboxdImported
 		}
 
 		if canSeeWatching {
@@ -396,35 +414,32 @@ func containsObjectID(list []primitive.ObjectID, target primitive.ObjectID) bool
 	return false
 }
 
-type roomMatchData struct {
-	User1ID string `json:"user1Id"`
-	User2ID string `json:"user2Id"`
-}
-
 func areUsersMatched(ctx context.Context, userA, userB string) bool {
-	keys, err := config.RedisClient.Keys(ctx, "chatroom:*").Result()
+	chatroomCol := config.GetCollection(config.DB, "chatrooms")
+	filter := bson.M{
+		"$and": bson.A{
+			bson.M{"status": bson.M{"$ne": "unmatched"}},
+			bson.M{
+				"$or": bson.A{
+					bson.M{"user1Id": userA, "user2Id": userB},
+					bson.M{"user1Id": userB, "user2Id": userA},
+				},
+			},
+		},
+	}
+
+	err := chatroomCol.FindOne(ctx, filter).Err()
+	if err == mongo.ErrNoDocuments {
+		log.Printf("[REDIS-KEYS-REFAC] areUsersMatched mongo result=false userA=%s userB=%s", userA, userB)
+		return false
+	}
 	if err != nil {
+		log.Printf("[REDIS-KEYS-REFAC] areUsersMatched mongo error userA=%s userB=%s err=%v", userA, userB, err)
 		return false
 	}
 
-	for _, key := range keys {
-		payload, getErr := config.RedisClient.Get(ctx, key).Result()
-		if getErr != nil {
-			continue
-		}
-
-		var room roomMatchData
-		if unmarshalErr := json.Unmarshal([]byte(payload), &room); unmarshalErr != nil {
-			continue
-		}
-
-		if (room.User1ID == userA && room.User2ID == userB) ||
-			(room.User1ID == userB && room.User2ID == userA) {
-			return true
-		}
-	}
-
-	return false
+	log.Printf("[REDIS-KEYS-REFAC] areUsersMatched mongo result=true userA=%s userB=%s", userA, userB)
+	return true
 }
 
 // BlockUser — Kullanıcıyı engeller
@@ -534,6 +549,21 @@ func UnmatchUser() gin.HandlerFunc {
 
 // notifyUnmatch, iki kullanıcının eğer aktif bir odası varsa oradaki websocketlere unmatch tipi mesaj yollar
 func notifyUnmatch(u1, u2 string) {
+	// Chatroom'u "unmatched" olarak işaretle
+	ctx := context.Background()
+	roomsCol := config.GetCollection(config.DB, "chatrooms")
+	roomsCol.UpdateMany(ctx,
+		bson.M{"$or": bson.A{
+			bson.M{"user1Id": u1, "user2Id": u2},
+			bson.M{"user1Id": u2, "user2Id": u1},
+		}},
+		bson.M{"$set": bson.M{
+			"status":      "unmatched",
+			"unmatchedBy": u1,
+			"unmatchedAt": time.Now(),
+		}},
+	)
+
 	// Oda ID'sini genelde küçük olan ID - büyük olan ID şeklinde kurduğumuzu varsayarak buluruz
 	var roomID string
 	if u1 < u2 {
@@ -551,7 +581,6 @@ func notifyUnmatch(u1, u2 string) {
 	})
 
 	// Odadaki katılımcıları boşalt / Redis'ten odayı silebiliriz
-	ctx := context.Background()
 	config.RedisClient.Del(ctx, "chatroom:"+roomID)
 }
 
@@ -629,6 +658,315 @@ func UpdateProfile() gin.HandlerFunc {
 			"description": description,
 			"avatarUrl":   avatarURL,
 			"coverUrl":    coverURL,
+		})
+	}
+}
+
+type UpdateAccountInput struct {
+	Username string `json:"username" binding:"omitempty,min=3,max=30"`
+	Email    string `json:"email" binding:"omitempty,email"`
+	City     string `json:"city"`
+}
+
+type ChangePasswordInput struct {
+	OldPassword string `json:"oldPassword" binding:"required"`
+	NewPassword string `json:"newPassword" binding:"required,min=6"`
+}
+
+// UpdateAccountInfo — Kullanıcının hesap bilgilerini (username, email, city) günceller
+func UpdateAccountInfo() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		userIDHex := c.GetString("userId")
+		objectID, err := primitive.ObjectIDFromHex(userIDHex)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz kullanıcı kimliği!"})
+			return
+		}
+
+		var input UpdateAccountInput
+		if err := c.ShouldBindJSON(&input); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz veri: " + err.Error()})
+			return
+		}
+
+		userCollection := config.GetCollection(config.DB, "users")
+
+		// Çakışma kontrolü (username veya email değişiyorsa)
+		if input.Username != "" {
+			var existing models.User
+			err := userCollection.FindOne(ctx, bson.M{"username": input.Username, "_id": bson.M{"$ne": objectID}}).Decode(&existing)
+			if err == nil {
+				c.JSON(http.StatusConflict, gin.H{"error": "Kullanıcı adı zaten kullanımda!"})
+				return
+			}
+		}
+		if input.Email != "" {
+			var existing models.User
+			err := userCollection.FindOne(ctx, bson.M{"email": input.Email, "_id": bson.M{"$ne": objectID}}).Decode(&existing)
+			if err == nil {
+				c.JSON(http.StatusConflict, gin.H{"error": "E-posta adresi zaten kullanımda!"})
+				return
+			}
+		}
+
+		updateFields := bson.M{}
+		if input.Username != "" {
+			updateFields["username"] = input.Username
+		}
+		if input.Email != "" {
+			updateFields["email"] = input.Email
+		}
+		if input.City != "" {
+			updateFields["city"] = input.City
+		}
+
+		if len(updateFields) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Güncellenecek veri bulunamadı"})
+			return
+		}
+
+		_, err = userCollection.UpdateOne(ctx, bson.M{"_id": objectID}, bson.M{"$set": updateFields})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Hesap bilgileri güncellenemedi"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"message": "Hesap bilgileri başarıyla güncellendi"})
+	}
+}
+
+// ChangePassword — Kullanıcının şifresini günceller
+func ChangePassword() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		userIDHex := c.GetString("userId")
+		objectID, err := primitive.ObjectIDFromHex(userIDHex)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz kullanıcı kimliği!"})
+			return
+		}
+
+		var input ChangePasswordInput
+		if err := c.ShouldBindJSON(&input); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz veri: " + err.Error()})
+			return
+		}
+
+		userCollection := config.GetCollection(config.DB, "users")
+
+		var user models.User
+		if err := userCollection.FindOne(ctx, bson.M{"_id": objectID}).Decode(&user); err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Kullanıcı bulunamadı"})
+			return
+		}
+
+		// Eski şifreyi doğrula
+		if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(input.OldPassword)); err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Mevcut şifre hatalı!"})
+			return
+		}
+
+		// Yeni şifreyi hashle
+		hashedPassword, err := bcrypt.GenerateFromPassword([]byte(input.NewPassword), bcrypt.DefaultCost)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Şifre işlenemedi!"})
+			return
+		}
+
+		_, err = userCollection.UpdateOne(ctx, bson.M{"_id": objectID}, bson.M{"$set": bson.M{"password": string(hashedPassword)}})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Şifre güncellenemedi"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"message": "Şifre başarıyla güncellendi"})
+	}
+}
+
+// DeleteAccount — Kullanıcı hesabını ve ilişkili tüm verileri siler
+func DeleteAccount() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		userIDHex := c.GetString("userId")
+		objectID, err := primitive.ObjectIDFromHex(userIDHex)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz kullanıcı kimliği!"})
+			return
+		}
+
+		// Önce eşleşmeleri unmatch yapalım
+		var user models.User
+		userCollection := config.GetCollection(config.DB, "users")
+		if err := userCollection.FindOne(ctx, bson.M{"_id": objectID}).Decode(&user); err == nil {
+			for _, friendID := range user.Friends {
+				notifyUnmatch(userIDHex, friendID.Hex())
+				userCollection.UpdateOne(ctx, bson.M{"_id": friendID}, bson.M{"$pull": bson.M{"friends": objectID}})
+			}
+		}
+
+		// Sonra tablolarını sil
+		config.GetCollection(config.DB, "lists").DeleteMany(ctx, bson.M{"userId": userIDHex})
+		config.GetCollection(config.DB, "friend_requests").DeleteMany(ctx, bson.M{"$or": bson.A{bson.M{"from": userIDHex}, bson.M{"to": userIDHex}}})
+		config.GetCollection(config.DB, "notifications").DeleteMany(ctx, bson.M{"$or": bson.A{bson.M{"userId": userIDHex}, bson.M{"senderId": userIDHex}}})
+		config.GetCollection(config.DB, "chat_rooms").DeleteMany(ctx, bson.M{"$or": bson.A{bson.M{"user1Id": userIDHex}, bson.M{"user2Id": userIDHex}}})
+
+		_, err = userCollection.DeleteOne(ctx, bson.M{"_id": objectID})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Hesap silinemedi"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"message": "Hesap ve ilişkili veriler başarıyla silindi"})
+	}
+}
+
+// GetBlockedUsers — Engellenen kullanıcıları getirir
+func GetBlockedUsers() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		userIDHex := c.GetString("userId")
+		objectID, err := primitive.ObjectIDFromHex(userIDHex)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz kullanıcı kimliği!"})
+			return
+		}
+
+		userCollection := config.GetCollection(config.DB, "users")
+		var user models.User
+		if err := userCollection.FindOne(ctx, bson.M{"_id": objectID}).Decode(&user); err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Kullanıcı bulunamadı"})
+			return
+		}
+
+		if len(user.BlockedUsers) == 0 {
+			c.JSON(http.StatusOK, gin.H{"blockedUsers": []interface{}{}})
+			return
+		}
+
+		cursor, err := userCollection.Find(ctx, bson.M{"_id": bson.M{"$in": user.BlockedUsers}})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Kullanıcılar getirilemedi"})
+			return
+		}
+		defer cursor.Close(ctx)
+
+		var users []models.User
+		if err := cursor.All(ctx, &users); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Kullanıcılar okunamadı"})
+			return
+		}
+
+		var result []map[string]interface{}
+		for _, u := range users {
+			result = append(result, map[string]interface{}{
+				"id":        u.ID.Hex(),
+				"username":  u.Username,
+				"avatarUrl": u.AvatarURL,
+			})
+		}
+
+		c.JSON(http.StatusOK, gin.H{"blockedUsers": result})
+	}
+}
+
+// UnblockUser — Kullanıcının engelini kaldırır
+func UnblockUser() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		userIDHex := c.GetString("userId")
+		objectID, err := primitive.ObjectIDFromHex(userIDHex)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz kullanıcı kimliği!"})
+			return
+		}
+
+		targetIDHex := c.Param("targetId")
+		targetID, err := primitive.ObjectIDFromHex(targetIDHex)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz hedef kullanıcı kimliği!"})
+			return
+		}
+
+		userCollection := config.GetCollection(config.DB, "users")
+		_, err = userCollection.UpdateOne(ctx, bson.M{"_id": objectID}, bson.M{"$pull": bson.M{"blocked_users": targetID}})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Engellenen kullanıcı kaldırılamadı"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"message": "Kullanıcının engeli kaldırıldı"})
+	}
+}
+
+// GetNotificationSettings — Kullanıcının mevcut bildirim ayarlarını getirir
+func GetNotificationSettings() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		userIDHex := c.GetString("userId")
+		objectID, err := primitive.ObjectIDFromHex(userIDHex)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz kullanıcı kimliği!"})
+			return
+		}
+
+		var user models.User
+		userCollection := config.GetCollection(config.DB, "users")
+		if err := userCollection.FindOne(ctx, bson.M{"_id": objectID}).Decode(&user); err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Kullanıcı bulunamadı"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"notificationSettings": user.NotificationSettings})
+	}
+}
+
+// UpdateNotificationSettings — Kullanıcının bildirim ayarlarını günceller
+func UpdateNotificationSettings() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		userIDHex := c.GetString("userId")
+		objectID, err := primitive.ObjectIDFromHex(userIDHex)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz kullanıcı kimliği!"})
+			return
+		}
+
+		var input models.NotificationSettings
+		if err := c.ShouldBindJSON(&input); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz veri: " + err.Error()})
+			return
+		}
+
+		userCollection := config.GetCollection(config.DB, "users")
+		_, err = userCollection.UpdateOne(
+			ctx,
+			bson.M{"_id": objectID},
+			bson.M{"$set": bson.M{"notification_settings": input}},
+		)
+
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Bildirim ayarları güncellenemedi"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"message":              "Bildirim ayarları güncellendi",
+			"notificationSettings": input,
 		})
 	}
 }

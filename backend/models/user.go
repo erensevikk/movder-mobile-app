@@ -13,22 +13,37 @@ type WatchHistoryItem struct {
 	WatchedAt  time.Time `json:"watchedAt" bson:"watched_at"`
 }
 
+type NotificationSettings struct {
+	PushEnabled   bool `json:"pushEnabled" bson:"push_enabled"`
+	MatchAlerts   bool `json:"matchAlerts" bson:"match_alerts"`
+	MessageAlerts bool `json:"messageAlerts" bson:"message_alerts"`
+	FriendAlerts  bool `json:"friendAlerts" bson:"friend_alerts"`
+}
+
+type PrivacySettings struct {
+	WatchingVisibility string `json:"watchingVisibility" bson:"watching_visibility"`
+	ProfileVisibility  string `json:"profileVisibility" bson:"profile_visibility"`
+	SearchDiscoverable bool   `json:"searchDiscoverable" bson:"search_discoverable"`
+}
+
 type User struct {
-	ID                 primitive.ObjectID   `json:"id,omitempty" bson:"_id,omitempty"`
-	Username           string               `json:"username" bson:"username" binding:"required,min=3,max=30"`
-	Email              string               `json:"email" bson:"email" binding:"required,email"`
-	Password           string               `json:"password,omitempty" bson:"password" binding:"required,min=6"`
-	City               string               `json:"city" bson:"city" binding:"required"`
-	BirthDate          string               `json:"birthDate" bson:"birth_date" binding:"required"`
-	Description        string               `json:"description,omitempty" bson:"description,omitempty"`
-	AvatarURL          string               `json:"avatarUrl,omitempty" bson:"avatar_url,omitempty"`
-	CoverURL           string               `json:"coverUrl,omitempty" bson:"cover_url,omitempty"`
-	LetterboxdImported bool                 `json:"letterboxdImported" bson:"letterboxd_imported"`
-	CreatedAt          time.Time            `json:"createdAt" bson:"createdAt"`
-	Friends            []primitive.ObjectID `json:"friends,omitempty" bson:"friends,omitempty"`
-	BlockedUsers       []primitive.ObjectID `json:"blockedUsers,omitempty" bson:"blocked_users,omitempty"`
-	UnmatchedUsers     []primitive.ObjectID `json:"unmatchedUsers,omitempty" bson:"unmatched_users,omitempty"`
-	WatchHistory       []WatchHistoryItem   `json:"watchHistory,omitempty" bson:"watch_history,omitempty"`
+	ID                   primitive.ObjectID   `json:"id,omitempty" bson:"_id,omitempty"`
+	Username             string               `json:"username" bson:"username" binding:"required,min=3,max=30"`
+	Email                string               `json:"email" bson:"email" binding:"required,email"`
+	Password             string               `json:"password,omitempty" bson:"password" binding:"required,min=6"`
+	City                 string               `json:"city" bson:"city" binding:"required"`
+	BirthDate            string               `json:"birthDate" bson:"birth_date" binding:"required"`
+	Description          string               `json:"description,omitempty" bson:"description,omitempty"`
+	AvatarURL            string               `json:"avatarUrl,omitempty" bson:"avatar_url,omitempty"`
+	CoverURL             string               `json:"coverUrl,omitempty" bson:"cover_url,omitempty"`
+	LetterboxdImported   bool                 `json:"letterboxdImported" bson:"letterboxd_imported"`
+	CreatedAt            time.Time            `json:"createdAt" bson:"createdAt"`
+	Friends              []primitive.ObjectID `json:"friends,omitempty" bson:"friends,omitempty"`
+	BlockedUsers         []primitive.ObjectID `json:"blockedUsers,omitempty" bson:"blocked_users,omitempty"`
+	UnmatchedUsers       []primitive.ObjectID `json:"unmatchedUsers,omitempty" bson:"unmatched_users,omitempty"`
+	WatchHistory         []WatchHistoryItem   `json:"watchHistory,omitempty" bson:"watch_history,omitempty"`
+	NotificationSettings NotificationSettings `json:"notificationSettings" bson:"notification_settings"`
+	PrivacySettings      *PrivacySettings     `json:"privacySettings,omitempty" bson:"privacy_settings,omitempty"`
 }
 
 // LoginInput giriş için gerekli alanlar (kayıt modeli değil)

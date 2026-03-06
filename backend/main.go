@@ -1,12 +1,17 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"movder-backend/config"
 	"movder-backend/routes"
+	"movder-backend/services"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -24,7 +29,16 @@ func main() {
 	// 2. Veritabanlarini ve servisleri baslat
 	config.ConnectDB()
 	config.ConnectRedis()
-	config.ConnectRabbitMQ()
+
+	// RabbitMQ Manager başlat (yeni mimari)
+	config.InitRabbitMQManager()
+
+	// Worker pool'ları başlat (goroutine fan-out öneleme)
+	config.InitWorkerPools()
+
+	// Redis tabanlı eşleşme havuzunu başlat
+	services.InitCandidatePool()
+
 	if err := config.EnsureUsersCollectionSchema(); err != nil {
 		panic("users semasi uygulanamadi: " + err.Error())
 	}
@@ -48,7 +62,37 @@ func main() {
 		c.JSON(200, gin.H{"mesaj": "Movder API - Profesyonel Mimari Aktif!"})
 	})
 
-	// 6. Motoru atesle
+	// 6. Graceful shutdown için signal handling
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		<-quit
+		log.Println("🛑 Shutdown signal alındı, kaynaklar kapatılıyor...")
+
+		// Worker pool'ları kapat
+		config.CloseWorkerPools()
+
+		// RabbitMQ kapat
+		config.CloseRabbitMQ()
+
+		// Redis kapat
+		if config.RedisClient != nil {
+			config.RedisClient.Close()
+		}
+
+		// MongoDB kapat
+		if config.DB != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			config.DB.Disconnect(ctx)
+		}
+
+		log.Println("✅ Tüm kaynaklar başarıyla kapatıldı")
+		os.Exit(0)
+	}()
+
+	// 7. Motoru atesle
 	fmt.Println("Movder Sunucusu 8080 portunda calisiyor...")
 	r.Run(":8080")
 }

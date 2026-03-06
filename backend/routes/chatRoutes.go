@@ -15,8 +15,12 @@ func ChatRoutes(r *gin.Engine) {
 	protected := r.Group("/api/chat")
 	protected.Use(middleware.AuthMiddleware())
 	{
-		protected.GET("/rooms", controllers.GetChatRooms())
-		protected.GET("/rooms/:roomId/messages", controllers.GetChatMessages())
+		// OPTIMIZED: Aggregation kullanan versiyon (N+1 query çözüldü)
+		protected.GET("/rooms", controllers.GetChatRoomsOptimized())
+
+		// OPTIMIZED: Pagination destekli versiyon (limit + cursor)
+		protected.GET("/rooms/:roomId/messages", controllers.GetChatMessagesPaginated())
+
 		protected.DELETE("/rooms/:roomId", controllers.HideChatRoom())
 	}
 }

@@ -17,8 +17,18 @@ func ConnectDB() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Bağlantı bilgisi artık .env dosyasından okunuyor — hardcoded değil
-	mongoURI := GetEnv("MONGODB_URI", "mongodb://admin:password123@localhost:27017")
+	// Host adresi: Docker içinde "mongodb", localde "localhost"
+	mongoHost := GetMongoHost()
+	mongoUser := GetEnv("MONGO_USER", "admin")
+	mongoPassword := GetEnv("MONGO_PASSWORD", "password123")
+	mongoPort := GetEnv("MONGO_PORT", "27017")
+
+	// Bağlantı bilgisi: Docker için service name, local için localhost
+	mongoURI := GetEnv("MONGODB_URI",
+		fmt.Sprintf("mongodb://%s:%s@%s:%s", mongoUser, mongoPassword, mongoHost, mongoPort))
+
+	log.Printf("[DEBUG] MongoDB bağlanıyor: host=%s, port=%s", mongoHost, mongoPort)
+
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoURI))
 	if err != nil {
 		log.Fatal("Bağlantı hatası: ", err)
@@ -66,6 +76,31 @@ func EnsureUsersCollectionSchema() error {
 	if _, err := users.Indexes().CreateMany(ctx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "username", Value: 1}}, Options: options.Index().SetUnique(true)},
 		{Keys: bson.D{{Key: "email", Value: 1}}, Options: options.Index().SetUnique(true)},
+		// OPTIMIZED: Arama performansı için yeni indexler
+		// username_lower: case-insensitive prefix search için
+		{Keys: bson.D{{Key: "username_lower", Value: 1}}},
+		// privacy_settings.search_discoverable: keşfedilebilirlik filtresi için
+		{Keys: bson.D{{Key: "privacy_settings.search_discoverable", Value: 1}}},
+		// Composite index: username prefix + privacy + blocked (en sık kullanılan sorgu pattern'i)
+		{Keys: bson.D{
+			{Key: "username_lower", Value: 1},
+			{Key: "privacy_settings.search_discoverable", Value: 1},
+		}},
+	}); err != nil {
+		return err
+	}
+
+	// FRIEND_REQUESTS — arkadaşlık istekleri için indexler
+	friendRequests := db.Collection("friend_requests")
+	if _, err := friendRequests.Indexes().CreateMany(ctx, []mongo.IndexModel{
+		// from + to + status: istek kontrolü için
+		{Keys: bson.D{{Key: "from", Value: 1}, {Key: "to", Value: 1}, {Key: "status", Value: 1}}},
+		// to + from + status: ters yön kontrolü için
+		{Keys: bson.D{{Key: "to", Value: 1}, {Key: "from", Value: 1}, {Key: "status", Value: 1}}},
+		// user'in gönderdiği istekler
+		{Keys: bson.D{{Key: "from", Value: 1}, {Key: "status", Value: 1}}},
+		// user'in aldığı istekler
+		{Keys: bson.D{{Key: "to", Value: 1}, {Key: "status", Value: 1}}},
 	}); err != nil {
 		return err
 	}
@@ -75,6 +110,8 @@ func EnsureUsersCollectionSchema() error {
 	if _, err := chatrooms.Indexes().CreateMany(ctx, []mongo.IndexModel{
 		// Tekil oda kimliği
 		{Keys: bson.D{{Key: "roomId", Value: 1}}, Options: options.Index().SetUnique(true)},
+		// OPTIMIZED: Compound index for user pair lookup (A ile B arasındaki oda)
+		{Keys: bson.D{{Key: "user1Id", Value: 1}, {Key: "user2Id", Value: 1}}},
 		// İki kullanıcı arasında oda ararken hız
 		{Keys: bson.D{{Key: "user1Id", Value: 1}}},
 		{Keys: bson.D{{Key: "user2Id", Value: 1}}},
@@ -114,6 +151,19 @@ func EnsureUsersCollectionSchema() error {
 		{Keys: bson.D{{Key: "listId", Value: 1}, {Key: "position", Value: 1}}},
 		// Aynı film aynı listeye ikinci kez eklenmesin
 		{Keys: bson.D{{Key: "listId", Value: 1}, {Key: "tmdbId", Value: 1}}},
+	}); err != nil {
+		return err
+	}
+
+	// NOTIFICATIONS — bildirimler için indexler
+	notifications := db.Collection("notifications")
+	if _, err := notifications.Indexes().CreateMany(ctx, []mongo.IndexModel{
+		// Kullanıcının bildirimleri: userId + createdAt desc (en yeni en üstte)
+		{Keys: bson.D{{Key: "userId", Value: 1}, {Key: "createdAt", Value: -1}}},
+		// Okunmuş/okunmamış filtreleme ile birlikte
+		{Keys: bson.D{{Key: "userId", Value: 1}, {Key: "isRead", Value: 1}, {Key: "createdAt", Value: -1}}},
+		// Sender bazlı bildirimler (kimden geldi)
+		{Keys: bson.D{{Key: "senderId", Value: 1}}},
 	}); err != nil {
 		return err
 	}

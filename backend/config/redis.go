@@ -11,7 +11,16 @@ import (
 var RedisClient *redis.Client
 
 func ConnectRedis() {
-	redisURI := GetEnv("REDIS_URI", "redis://:redispass123@localhost:6379")
+	// Host adresi: Docker içinde "redis", localde "localhost"
+	redisHost := GetRedisHost()
+	redisPassword := GetEnv("REDIS_PASSWORD", "redispass123")
+	redisPort := GetEnv("REDIS_PORT", "6379")
+
+	// Docker veya local için uygun URI oluştur
+	redisURI := GetEnv("REDIS_URI",
+		fmt.Sprintf("redis://:%s@%s:%s", redisPassword, redisHost, redisPort))
+
+	log.Printf("[DEBUG] Redis bağlanıyor: host=%s, port=%s", redisHost, redisPort)
 
 	opt, err := redis.ParseURL(redisURI)
 	if err != nil {

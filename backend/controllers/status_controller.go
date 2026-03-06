@@ -22,11 +22,12 @@ const activeWatchingUsersKey = "watching:active_users"
 
 // SetWatchStatus — Kullanıcının izleme durumunu belirler
 // userId JWT token'dan alınır (manipülasyon engeli)
-// Redis'te iki key oluşturulur:
-//   - watching:<userId> → Hash (film bilgileri, TTL: 6 saat)
-//   - movie:<tmdbId>:watchers → Set (bu filmi izleyenlerin listesi)
+// Redis'te şu key'ler kullanılır:
+//   - watching:<userId>       → JSON (film bilgileri, TTL: 15 dakika)
+//   - movie:<tmdbId>:watchers → Set (bu filmi izleyen userId listesi, TTL: 15 dakika)
+//   - watching:active_users   → Set (herhangi bir şeyi aktif izleyen kullanıcılar)
 //
-// Ayrıca MongoDB'deki kullanıcının watch_history alanına eşsiz olarak eklenir
+// Ayrıca MongoDB'deki kullanıcının watch_history alanına eşsiz olarak eklenir.
 func SetWatchStatus() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx, cancel, _ := requestContext(c)
@@ -63,7 +64,7 @@ func SetWatchStatus() gin.HandlerFunc {
 		pipe.Set(ctx, watchKey, statusJSON, 15*time.Minute) // 15 dakika TTL
 		pipe.SAdd(ctx, movieKey, userId)                    // İzleyenler set'ine ekle
 		pipe.Expire(ctx, movieKey, 15*time.Minute)          // Set'e de TTL koy
-		pipe.SAdd(ctx, activeWatchingUsersKey, userId)      // Aktif izleyen kullanıcı indeksine ekle
+		pipe.SAdd(ctx, activeWatchingUsersKey, userId)      // Aktif izleyiciler set'ine ekle
 		_, err := pipe.Exec(ctx)
 
 		if err != nil {
@@ -86,12 +87,19 @@ func SetWatchStatus() gin.HandlerFunc {
 
 			// Eğer bu filmi daha önce geçmişe eklemediyse (tmdb_id ne input.TmdbID) ekle
 			// Bu sayede her film listede sadece bir kez kalır ve İLK izleme sırası korunur
+			// OPTIMIZED: $slice ile history boyutunu sınırla (maks 50 item)
 			filter := bson.M{
 				"_id":                   objectID,
 				"watch_history.tmdb_id": bson.M{"$ne": input.TmdbID},
 			}
 			update := bson.M{
-				"$push": bson.M{"watch_history": historyItem},
+				"$push": bson.M{
+					"watch_history": bson.M{
+						"$each":     []interface{}{historyItem},
+						"$position": 0,
+						"$slice":    -50, // En son 50 item'ı tut
+					},
+				},
 			}
 
 			_, mongoErr := userCollection.UpdateOne(ctx, filter, update)
@@ -113,51 +121,103 @@ func SetWatchStatus() gin.HandlerFunc {
 // GetActiveWatchers — Belirli bir filmi izleyenleri listeler
 func GetActiveWatchers() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		ctx := context.Background()
-		viewerIDHex := c.GetString("userId")
-		viewerID, err := primitive.ObjectIDFromHex(viewerIDHex)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz kullanıcı kimliği!"})
+		ctx, cancel, _ := requestContext(c)
+		defer cancel()
+
+		viewerIDHex, ok := mustUserID(c)
+		if !ok {
+			return
+		}
+		viewerID, ok := parseObjectIDOrBadRequest(c, viewerIDHex, "kullanıcı kimliği")
+		if !ok {
 			return
 		}
 
 		tmdbIdStr := c.Query("tmdbId")
 		tmdbID, err := strconv.Atoi(tmdbIdStr)
 		if err != nil || tmdbID <= 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçerli bir tmdbId gerekli"})
+			errorResponse(c, http.StatusBadRequest, "INVALID_TMDB_ID", "Geçerli bir tmdbId gerekli", tmdbIdStr)
 			return
 		}
 
 		movieKey := fmt.Sprintf("movie:%d:watchers", tmdbID)
 		userIDs, err := config.RedisClient.SMembers(ctx, movieKey).Result()
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "İzleyenler alınamadı"})
+			errorResponse(c, http.StatusInternalServerError, "WATCHERS_FETCH_FAILED", "İzleyenler alınamadı", err.Error())
 			return
 		}
 
 		// Her izleyicinin detayını çek
+		// OPTIMIZED: MongoDB $in operatörü ile tek sorguda kullanıcıları al
 		var watchers []models.WatchStatus
-		userCollection := config.GetCollection(config.DB, "users")
+
+		if len(userIDs) == 0 {
+			c.JSON(http.StatusOK, gin.H{
+				"tmdbId":       tmdbID,
+				"watcherCount": 0,
+				"watchers":     []models.WatchStatus{},
+			})
+			return
+		}
+
+		// Redis'ten tüm watch status'ları tek seferde al
+		watchDataMap := make(map[string]string)
 		for _, uid := range userIDs {
 			watchKey := fmt.Sprintf("watching:%s", uid)
 			data, err := config.RedisClient.Get(ctx, watchKey).Result()
 			if err != nil {
-				continue // TTL dolmuş veya kullanıcı çıkmış
-			}
-
-			targetID, err := primitive.ObjectIDFromHex(uid)
-			if err != nil {
 				continue
 			}
+			watchDataMap[uid] = data
+		}
 
-			var target models.User
-			if err := userCollection.FindOne(ctx, bson.M{"_id": targetID}).Decode(&target); err != nil {
+		// MongoDB'den tüm kullanıcıları tek sorguda al
+		userCollection := config.GetCollection(config.DB, "users")
+		objIDs := make([]primitive.ObjectID, 0, len(userIDs))
+		for _, uid := range userIDs {
+			if objID, err := primitive.ObjectIDFromHex(uid); err == nil {
+				objIDs = append(objIDs, objID)
+			}
+		}
+
+		if len(objIDs) == 0 {
+			c.JSON(http.StatusOK, gin.H{
+				"tmdbId":       tmdbID,
+				"watcherCount": 0,
+				"watchers":     []models.WatchStatus{},
+			})
+			return
+		}
+
+		cursor, err := userCollection.Find(ctx, bson.M{"_id": bson.M{"$in": objIDs}})
+		if err != nil {
+			errorResponse(c, http.StatusInternalServerError, "USERS_FETCH_FAILED", "Kullanıcılar alınamadı", err.Error())
+			return
+		}
+		defer cursor.Close(ctx)
+
+		var users []models.User
+		if err := cursor.All(ctx, &users); err != nil {
+			errorResponse(c, http.StatusInternalServerError, "USERS_READ_FAILED", "Kullanıcılar okunamadı", err.Error())
+			return
+		}
+
+		// Kullanıcıları map'e dönüştür hızlı erişim için
+		userMap := make(map[string]models.User)
+		for _, user := range users {
+			userMap[user.ID.Hex()] = user
+		}
+
+		// Her kullanıcı için gizlilik kontrolü yap
+		for uid, data := range watchDataMap {
+			target, exists := userMap[uid]
+			if !exists {
 				continue
 			}
 
 			isFriend := containsObjectID(target.Friends, viewerID)
 			isMatched := areUsersMatched(ctx, viewerIDHex, uid)
-			if !canViewerSeeWatching(viewerIDHex, viewerID, targetID, isFriend, isMatched, userPrivacySettings(target)) {
+			if !canViewerSeeWatching(viewerIDHex, viewerID, target.ID, isFriend, isMatched, userPrivacySettings(target)) {
 				continue
 			}
 
@@ -179,8 +239,13 @@ func GetActiveWatchers() gin.HandlerFunc {
 // RemoveWatchStatus — Kullanıcının izleme durumunu kaldırır
 func RemoveWatchStatus() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		ctx := context.Background()
-		userId := c.GetString("userId")
+		ctx, cancel, _ := requestContext(c)
+		defer cancel()
+
+		userId, ok := mustUserID(c)
+		if !ok {
+			return
+		}
 
 		clearPreviousStatus(ctx, userId)
 
@@ -193,8 +258,13 @@ func RemoveWatchStatus() gin.HandlerFunc {
 // GetMyStatus — Kullanıcının mevcut izleme durumunu döner
 func GetMyStatus() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		ctx := context.Background()
-		userId := c.GetString("userId")
+		ctx, cancel, _ := requestContext(c)
+		defer cancel()
+
+		userId, ok := mustUserID(c)
+		if !ok {
+			return
+		}
 
 		watchKey := fmt.Sprintf("watching:%s", userId)
 		data, err := config.RedisClient.Get(ctx, watchKey).Result()
@@ -208,7 +278,7 @@ func GetMyStatus() gin.HandlerFunc {
 
 		var status models.WatchStatus
 		if err := json.Unmarshal([]byte(data), &status); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Durum okunamadı"})
+			errorResponse(c, http.StatusInternalServerError, "STATUS_READ_FAILED", "Durum okunamadı", err.Error())
 			return
 		}
 
@@ -231,9 +301,11 @@ type topActiveMovie struct {
 }
 
 // GetTopActiveMovies — Aktif izlenen filmleri izleyici sayısına göre sıralayıp döner
+// Önceden Redis KEYS("watching:*") kullanılırken, şimdi watching:active_users set'i üzerinden çalışır.
 func GetTopActiveMovies() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		ctx := context.Background()
+		ctx, cancel, _ := requestContext(c)
+		defer cancel()
 
 		limit := 5
 		if limitStr := c.Query("limit"); limitStr != "" {
@@ -244,7 +316,7 @@ func GetTopActiveMovies() gin.HandlerFunc {
 
 		userIDs, err := config.RedisClient.SMembers(ctx, activeWatchingUsersKey).Result()
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Aktif izlenen filmler alınamadı"})
+			errorResponse(c, http.StatusInternalServerError, "ACTIVE_MOVIES_FETCH_FAILED", "Aktif izlenen filmler alınamadı", err.Error())
 			return
 		}
 
@@ -253,8 +325,8 @@ func GetTopActiveMovies() gin.HandlerFunc {
 			return
 		}
 
-		agg := make(map[int]*topActiveMovie)
-		userCollection := config.GetCollection(config.DB, "users")
+		// OPTIMIZED: Redis'ten toplu watch status'ları al
+		watchDataMap := make(map[string]string)
 		staleUsers := make([]string, 0)
 
 		for _, uid := range userIDs {
@@ -264,21 +336,19 @@ func GetTopActiveMovies() gin.HandlerFunc {
 				staleUsers = append(staleUsers, uid)
 				continue
 			}
+			watchDataMap[uid] = data
+		}
 
+		// MongoDB'den tüm kullanıcıları tek sorguda al (batch fetch)
+		userCollection := config.GetCollection(config.DB, "users")
+
+		// Önce tüm status'ları parse et ve userID'leri topla
+		targetUserIDs := make([]primitive.ObjectID, 0, len(watchDataMap))
+		statusByUserID := make(map[string]models.WatchStatus)
+
+		for _, data := range watchDataMap {
 			var status models.WatchStatus
 			if err := json.Unmarshal([]byte(data), &status); err != nil {
-				continue
-			}
-
-			targetID, err := primitive.ObjectIDFromHex(status.UserID)
-			if err != nil {
-				continue
-			}
-			var user models.User
-			if err := userCollection.FindOne(ctx, bson.M{"_id": targetID}).Decode(&user); err != nil {
-				continue
-			}
-			if userPrivacySettings(user).WatchingVisibility != "public" {
 				continue
 			}
 
@@ -287,6 +357,56 @@ func GetTopActiveMovies() gin.HandlerFunc {
 				continue
 			}
 
+			targetID, err := primitive.ObjectIDFromHex(status.UserID)
+			if err != nil {
+				continue
+			}
+			targetUserIDs = append(targetUserIDs, targetID)
+			statusByUserID[status.UserID] = status
+		}
+
+		if len(targetUserIDs) == 0 {
+			// Temizlik yap ve dön
+			if len(staleUsers) > 0 {
+				config.RedisClient.SRem(ctx, activeWatchingUsersKey, staleUsers)
+			}
+			c.JSON(http.StatusOK, gin.H{"movies": []topActiveMovie{}})
+			return
+		}
+
+		// Batch query: $in operatörü ile tek sorguda kullanıcıları al
+		cursor, err := userCollection.Find(ctx, bson.M{"_id": bson.M{"$in": targetUserIDs}})
+		if err != nil {
+			errorResponse(c, http.StatusInternalServerError, "USERS_FETCH_FAILED", "Kullanıcılar alınamadı", err.Error())
+			return
+		}
+		defer cursor.Close(ctx)
+
+		var users []models.User
+		if err := cursor.All(ctx, &users); err != nil {
+			errorResponse(c, http.StatusInternalServerError, "USERS_READ_FAILED", "Kullanıcılar okunamadı", err.Error())
+			return
+		}
+
+		// Kullanıcıları map'e dönüştür
+		userMap := make(map[string]models.User)
+		for _, user := range users {
+			userMap[user.ID.Hex()] = user
+		}
+
+		// Filmleri aggregate et ve gizlilik kontrolü yap
+		agg := make(map[int]*topActiveMovie)
+		for userIDHex, status := range statusByUserID {
+			user, exists := userMap[userIDHex]
+			if !exists {
+				continue
+			}
+
+			if userPrivacySettings(user).WatchingVisibility != "public" {
+				continue
+			}
+
+			posterPath := strings.TrimSpace(status.PosterPath)
 			if _, ok := agg[status.TmdbID]; !ok {
 				agg[status.TmdbID] = &topActiveMovie{
 					TmdbID:       status.TmdbID,
@@ -325,6 +445,9 @@ func GetTopActiveMovies() gin.HandlerFunc {
 }
 
 // clearPreviousStatus — Önceki izleme durumunu Redis'ten temizler
+//   - watching:<userId> key'ini siler
+//   - movie:<tmdbId>:watchers set'inden userId'yi kaldırır
+//   - watching:active_users set'inden userId'yi kaldırır
 func clearPreviousStatus(ctx context.Context, userId string) {
 	watchKey := fmt.Sprintf("watching:%s", userId)
 	data, err := config.RedisClient.Get(ctx, watchKey).Result()
@@ -336,7 +459,6 @@ func clearPreviousStatus(ctx context.Context, userId string) {
 			config.RedisClient.SRem(ctx, movieKey, userId)
 		}
 	}
-
 	pipe := config.RedisClient.Pipeline()
 	pipe.Del(ctx, watchKey)
 	pipe.SRem(ctx, activeWatchingUsersKey, userId)
@@ -346,15 +468,20 @@ func clearPreviousStatus(ctx context.Context, userId string) {
 // HeartbeatStatus — Kullanıcının izleme süresini uzatır (ping)
 func HeartbeatStatus() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		ctx := context.Background()
-		userId := c.GetString("userId")
+		ctx, cancel, _ := requestContext(c)
+		defer cancel()
+
+		userId, ok := mustUserID(c)
+		if !ok {
+			return
+		}
 
 		watchKey := fmt.Sprintf("watching:%s", userId)
 
 		// Kullanıcı şu an izliyor mu kontrol et
 		data, err := config.RedisClient.Get(ctx, watchKey).Result()
 		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Aktif bir izleme durumu bulunamadı veya süresi doldu."})
+			errorResponse(c, http.StatusNotFound, "WATCH_STATUS_NOT_FOUND", "Aktif bir izleme durumu bulunamadı veya süresi doldu.", err.Error())
 			return
 		}
 
@@ -371,6 +498,9 @@ func HeartbeatStatus() gin.HandlerFunc {
 			_, _ = pipe.Exec(ctx)
 			log.Printf("[REDIS-KEYS-REFAC] HeartbeatStatus refreshed active user userId=%s tmdbId=%d", userId, status.TmdbID)
 		}
+
+		// Heartbeat geldiği sürece kullanıcıyı aktif set'te tut
+		config.RedisClient.SAdd(ctx, "watching:active_users", userId)
 
 		c.JSON(http.StatusOK, gin.H{"message": "İzleme durumu yenilendi!"})
 	}

@@ -5,12 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand"
 	"movder-backend/config"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
-	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/redis/go-redis/v9"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -38,80 +39,368 @@ type MatchResult struct {
 	MovieName string `json:"movieName"`
 }
 
-// PublishMatchRequest — Eşleşme isteğini RabbitMQ kuyruğuna gönderir
+// CandidatePool Redis sorted set tabanlı aday havuzu yöneticisi
+type CandidatePool struct {
+	mu           sync.RWMutex
+	activePools  map[int]*sync.Map // tmdbID -> userID -> MatchRequest
+	cleanupTimer *time.Ticker
+	ctx          context.Context
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
+}
+
+var candidatePool *CandidatePool
+
+// NewCandidatePool yeni bir aday havuzu oluşturur
+func NewCandidatePool() *CandidatePool {
+	ctx, cancel := context.WithCancel(context.Background())
+	pool := &CandidatePool{
+		activePools: make(map[int]*sync.Map),
+		ctx:         ctx,
+		cancel:      cancel,
+	}
+
+	// Periyodik temizlik başlat (her 30 saniyede bir)
+	pool.cleanupTimer = time.NewTicker(30 * time.Second)
+	pool.wg.Add(1)
+	go pool.cleanupLoop()
+
+	return pool
+}
+
+// cleanupLoop eski adayları temizler
+func (p *CandidatePool) cleanupLoop() {
+	defer p.wg.Done()
+
+	for {
+		select {
+		case <-p.ctx.Done():
+			return
+		case <-p.cleanupTimer.C:
+			p.cleanup()
+		}
+	}
+}
+
+// cleanup süresi dolmuş adayları temizler
+func (p *CandidatePool) cleanup() {
+	ctx := context.Background()
+	threshold := time.Now().Add(-2 * time.Minute).Unix()
+
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	for tmdbID, pool := range p.activePools {
+		pool.Range(func(key, value interface{}) bool {
+			userID := key.(string)
+			req := value.(MatchRequest)
+
+			// Süresi dolmuş mu?
+			if req.Timestamp < threshold {
+				// Redis'ten da kaldır
+				redisKey := fmt.Sprintf("match_candidates:%d", tmdbID)
+				config.RedisClient.ZRem(ctx, redisKey, userID)
+				pool.Delete(userID)
+				log.Printf("🧹 Süresi dolmuş aday temizlendi: %s (tmdbID: %d)", userID, tmdbID)
+			}
+			return true
+		})
+	}
+}
+
+// AddCandidate aday havuzuna ekler
+func (p *CandidatePool) AddCandidate(tmdbID int, req MatchRequest) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if _, ok := p.activePools[tmdbID]; !ok {
+		p.activePools[tmdbID] = &sync.Map{}
+	}
+
+	p.activePools[tmdbID].Store(req.UserID, req)
+
+	// Redis'e de ekle (yedekleme ve cross-node paylaşım için)
+	redisKey := fmt.Sprintf("match_candidates:%d", tmdbID)
+	data, _ := json.Marshal(req)
+	config.RedisClient.ZAdd(ctx, redisKey, redis.Z{
+		Score:  float64(req.Timestamp),
+		Member: req.UserID + ":" + string(data),
+	})
+	// 2 dakika sonra otomatik silinsin
+	config.RedisClient.Expire(ctx, redisKey, 2*time.Minute)
+}
+
+// RemoveCandidate aday havuzundan kaldırır
+func (p *CandidatePool) RemoveCandidate(tmdbID int, userID string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if pool, ok := p.activePools[tmdbID]; ok {
+		pool.Delete(userID)
+	}
+
+	// Redis'ten de kaldır
+	redisKey := fmt.Sprintf("match_candidates:%d", tmdbID)
+	config.RedisClient.ZRem(ctx, redisKey, userID)
+}
+
+// FindMatch aday bulur ve eşleştirir
+func (p *CandidatePool) FindMatch(tmdbID int, req MatchRequest, myUser *UserInfo) (*MatchResult, error) {
+	p.mu.RLock()
+	pool, ok := p.activePools[tmdbID]
+	p.mu.RUnlock()
+
+	if !ok {
+		return nil, nil
+	}
+
+	ctx := context.Background()
+	userCol := config.GetCollection(config.DB, "users")
+	myObjID, _ := primitive.ObjectIDFromHex(req.UserID)
+
+	var matchedReq *MatchRequest
+
+	// Redis'ten adayları al (sıralı - en eski önce)
+	redisKey := fmt.Sprintf("match_candidates:%d", tmdbID)
+	candidates, err := config.RedisClient.ZRange(ctx, redisKey, 0, -1).Result()
+	if err != nil && err != redis.Nil {
+		log.Printf("⚠️ Redis aday okuma hatası: %v", err)
+	}
+
+	// Önce in-memory havuzunu kontrol et
+	pool.Range(func(key, value interface{}) bool {
+		candidateID := key.(string)
+		candidate := value.(MatchRequest)
+
+		// Kendim değilim?
+		if candidateID == req.UserID {
+			return true
+		}
+
+		// İptal edilmiş mi?
+		cancelKey := fmt.Sprintf("match_cancelled:%s:%d", candidateID, tmdbID)
+		if val, _ := config.RedisClient.Get(ctx, cancelKey).Result(); val == "1" {
+			return true
+		}
+
+		// Engellenmiş mi?
+		targetID, _ := primitive.ObjectIDFromHex(candidateID)
+		blockedCount, _ := userCol.CountDocuments(ctx, bson.M{
+			"$or": bson.A{
+				bson.M{"_id": myObjID, "blocked_users": targetID},
+				bson.M{"_id": targetID, "blocked_users": myObjID},
+			},
+		})
+		if blockedCount > 0 {
+			return true
+		}
+
+		// Şehir filtresi
+		if req.LocalOnly || candidate.LocalOnly {
+			myCity := strings.TrimSpace(strings.ToLower(myUser.City))
+			targetCity := strings.TrimSpace(strings.ToLower(candidate.City))
+			if myCity == "" || targetCity == "" || myCity != targetCity {
+				return true
+			}
+		}
+
+		// Unmatched kontrolü
+		unmatchedPrior := false
+		for _, uID := range myUser.UnmatchedUsers {
+			if uID == targetID {
+				unmatchedPrior = true
+				break
+			}
+		}
+
+		// Olasılık kontrolü
+		randVal := rand.Intn(100)
+		threshold := 50
+		if unmatchedPrior {
+			threshold = 25
+		}
+		if randVal >= threshold {
+			return true
+		}
+
+		// Eşleşme bulundu!
+		matchedReq = &candidate
+		return false // Döngüyü sonlandır
+	})
+
+	if matchedReq == nil && len(candidates) > 0 {
+		// Redis'ten bulunan adayları dene
+		for _, candidateStr := range candidates {
+			// Format: "userID:jsonData"
+			idx := strings.Index(candidateStr, ":")
+			if idx == -1 {
+				continue
+			}
+			candidateID := candidateStr[:idx]
+			candidateData := candidateStr[idx+1:]
+
+			if candidateID == req.UserID {
+				continue
+			}
+
+			var candidate MatchRequest
+			if err := json.Unmarshal([]byte(candidateData), &candidate); err != nil {
+				continue
+			}
+
+			// Aynı kontroller
+			cancelKey := fmt.Sprintf("match_cancelled:%s:%d", candidateID, tmdbID)
+			if val, _ := config.RedisClient.Get(ctx, cancelKey).Result(); val == "1" {
+				continue
+			}
+
+			targetID, _ := primitive.ObjectIDFromHex(candidateID)
+			blockedCount, _ := userCol.CountDocuments(ctx, bson.M{
+				"$or": bson.A{
+					bson.M{"_id": myObjID, "blocked_users": targetID},
+					bson.M{"_id": targetID, "blocked_users": myObjID},
+				},
+			})
+			if blockedCount > 0 {
+				continue
+			}
+
+			if req.LocalOnly || candidate.LocalOnly {
+				myCity := strings.TrimSpace(strings.ToLower(myUser.City))
+				targetCity := strings.TrimSpace(strings.ToLower(candidate.City))
+				if myCity == "" || targetCity == "" || myCity != targetCity {
+					continue
+				}
+			}
+
+			unmatchedPrior := false
+			for _, uID := range myUser.UnmatchedUsers {
+				if uID == targetID {
+					unmatchedPrior = true
+					break
+				}
+			}
+
+			randVal := rand.Intn(100)
+			threshold := 50
+			if unmatchedPrior {
+				threshold = 25
+			}
+			if randVal >= threshold {
+				continue
+			}
+
+			matchedReq = &candidate
+			break
+		}
+	}
+
+	if matchedReq == nil {
+		return nil, nil
+	}
+
+	// Eşleşme oluştur
+	roomID := primitive.NewObjectID().Hex()
+
+	result := &MatchResult{
+		RoomID:    roomID,
+		User1ID:   req.UserID,
+		User1Name: req.Username,
+		User2ID:   matchedReq.UserID,
+		User2Name: matchedReq.Username,
+		TmdbID:    tmdbID,
+		MovieName: req.MovieName,
+	}
+
+	// Her iki adayı da havuzdan kaldır
+	p.RemoveCandidate(tmdbID, req.UserID)
+	p.RemoveCandidate(tmdbID, matchedReq.UserID)
+
+	// Redis'e eşleşmeyi kaydet
+	answerJSON, _ := json.Marshal(result)
+	config.RedisClient.Set(ctx, "chatroom:"+roomID, answerJSON, 4*time.Hour)
+	config.RedisClient.Set(ctx, "user_match:"+matchedReq.UserID, answerJSON, 15*time.Second)
+
+	log.Printf("🎉 Eşleşme bulundu! %s ↔ %s (%s)", req.Username, matchedReq.Username, req.MovieName)
+
+	return result, nil
+}
+
+// GetPoolSize havuzdaki aday sayısını döner
+func (p *CandidatePool) GetPoolSize(tmdbID int) int {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	if pool, ok := p.activePools[tmdbID]; ok {
+		count := 0
+		pool.Range(func(key, value interface{}) bool {
+			count++
+			return true
+		})
+		return count
+	}
+	return 0
+}
+
+// Stop havuzu durdurur
+func (p *CandidatePool) Stop() {
+	p.cancel()
+	p.cleanupTimer.Stop()
+	p.wg.Wait()
+	log.Println("🛑 CandidatePool durduruldu")
+}
+
+// UserInfo kullanıcı bilgileri
+type UserInfo struct {
+	Username       string
+	City           string
+	UnmatchedUsers []primitive.ObjectID
+}
+
+var ctx = context.Background()
+
+// InitCandidatePool aday havuzunu başlatır
+func InitCandidatePool() {
+	candidatePool = NewCandidatePool()
+	log.Println("✅ CandidatePool başlatıldı")
+}
+
+// PublishMatchRequest — Eşleşme isteğini Redis havuzuna ekler (RabbitMQ yerine)
 func PublishMatchRequest(req MatchRequest) error {
-	queueName := fmt.Sprintf("match_queue_%d", req.TmdbID)
+	// Redis'te kuyruk olduğunu bildir (toplam sayı için)
+	config.RedisClient.ZAdd(ctx, "match_queue_active", redis.Z{
+		Score:  float64(time.Now().Unix()),
+		Member: fmt.Sprintf("%d:%s", req.TmdbID, req.UserID),
+	})
 
-	// Kuyruğu oluştur (yoksa)
-	_, err := config.RabbitChannel.QueueDeclare(
-		queueName, // kuyruk adı
-		false,     // durable (kalıcı olmasın — geçici eşleşme verisi)
-		true,      // autoDelete (tüketiciler ayrılınca silinsin)
-		false,     // exclusive
-		false,     // noWait
-		nil,       // args
-	)
-	if err != nil {
-		return fmt.Errorf("kuyruk oluşturulamadı: %w", err)
+	// Aday havuzuna ekle
+	if candidatePool != nil {
+		candidatePool.AddCandidate(req.TmdbID, req)
 	}
 
-	body, err := json.Marshal(req)
-	if err != nil {
-		return fmt.Errorf("mesaj serileştirilemedi: %w", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	err = config.RabbitChannel.PublishWithContext(ctx,
-		"",        // exchange
-		queueName, // routing key
-		false,     // mandatory
-		false,     // immediate
-		amqp.Publishing{
-			ContentType: "application/json",
-			Body:        body,
-		},
-	)
-	if err != nil {
-		return fmt.Errorf("mesaj gönderilemedi: %w", err)
-	}
-
-	log.Printf("🔍 Eşleşme isteği kuyruğa eklendi: %s → %s", req.Username, req.MovieName)
+	log.Printf("🔍 Eşleşme isteği havuza eklendi: %s → %s (tmdbID: %d)", req.Username, req.MovieName, req.TmdbID)
 	return nil
 }
 
-// CheckForMatch — Eşleşme olup olmadığını RabbitMQ kuyruğuna bakarak kontrol eder
+// CheckForMatch — Redis havuzunda eşleşme arar (RabbitMQ polling yerine)
 func CheckForMatch(userId string, tmdbID int, localOnly bool) (*MatchResult, error) {
-	ctx := context.Background()
-	userCol := config.GetCollection(config.DB, "users")
-
-	// Kullanıcı başına aktif arama lock'u (aynı anda birden fazla CheckForMatch çalışmasın)
+	// Lock kontrolü
 	lockKey := fmt.Sprintf("match_lock:%s:%d", userId, tmdbID)
 	ok, err := config.RedisClient.SetNX(ctx, lockKey, time.Now().Unix(), 30*time.Second).Result()
 	if err != nil {
 		log.Printf("⚠️ match lock set error userId=%s tmdbId=%d err=%v", userId, tmdbID, err)
 	} else if !ok {
-		// Aynı kullanıcı için bu filmde zaten aktif bir arama var; ekstra yük oluşturmayalım
 		log.Printf("🔁 match already in progress userId=%s tmdbId=%d", userId, tmdbID)
 		return nil, nil
 	}
 	defer config.RedisClient.Del(ctx, lockKey)
 
-	// Kuyruğa girdiğini / aktif beklediğini Redis ZSet ile bildir (Zaman bazlı aktiflik kontrolü)
-	config.RedisClient.ZAdd(ctx, "match_queue_active", redis.Z{
-		Score:  float64(time.Now().Unix()),
-		Member: userId,
-	})
-
-	// 1. Önce, başkası beni seçip eşleşme yaratmış mı ona bakalım (Ben kuyruktaykenden o beni çektiyse)
+	// Önce bana bir eşleşme gelmiş mi kontrol et
 	myMatchKey := fmt.Sprintf("user_match:%s", userId)
 	if matchData, err := config.RedisClient.Get(ctx, myMatchKey).Result(); err == nil {
 		var result MatchResult
 		if err := json.Unmarshal([]byte(matchData), &result); err == nil {
-			// Eşleşme bulundu, Redis'teki key'i silebiliriz ki bir daha sürekli çıkmasın
-			// Frontend her zaman user2Name'i "karşı taraf" olarak okuyor.
-			// Bu yüzden User1 ile User2'nin yerlerini değiştirerek dönüyoruz.
+			// User1 ve User2'yi swap et (frontend beklentisi)
 			swapped := MatchResult{
 				RoomID:    result.RoomID,
 				User1ID:   result.User2ID,
@@ -125,216 +414,92 @@ func CheckForMatch(userId string, tmdbID int, localOnly bool) (*MatchResult, err
 		}
 	}
 
-	queueName := fmt.Sprintf("match_queue_%d", tmdbID)
+	// Kullanıcı bilgilerini al
+	userCol := config.GetCollection(config.DB, "users")
+	myObjID, _ := primitive.ObjectIDFromHex(userId)
 
-	// Kuyruğu garanti altına alalım
-	_, err = config.RabbitChannel.QueueDeclare(queueName, false, true, false, false, nil)
+	var myUser UserInfo
+	err = userCol.FindOne(ctx, bson.M{"_id": myObjID}).Decode(&myUser)
 	if err != nil {
+		log.Printf("⚠️ Kullanıcı bilgisi alınamadı: %s", userId)
 		return nil, err
 	}
 
-	// Kendi bilgilerimi al (Unmatched kontrolü ve Publish için)
-	var myUser struct {
-		Username       string               `bson:"username"`
-		City           string               `bson:"city"`
-		UnmatchedUsers []primitive.ObjectID `bson:"unmatched_users"`
-	}
-	myObjID, _ := primitive.ObjectIDFromHex(userId)
-	_ = userCol.FindOne(ctx, bson.M{"_id": myObjID}).Decode(&myUser)
-
-	// My watching status for MovieName
+	// İzleme durumunu al
 	watchKey := fmt.Sprintf("watching:%s", userId)
 	data, _ := config.RedisClient.Get(ctx, watchKey).Result()
 	var myStatus struct {
 		MovieName string `json:"movieName"`
 	}
-	json.Unmarshal([]byte(data), &myStatus)
-
-	// Eşleşme araması devam ettiği sürece izleme durumunun süresini tazele
-	// (heartbeat aralığından bağımsız olarak TTL'in dolmasını engelle)
 	if data != "" {
+		json.Unmarshal([]byte(data), &myStatus)
+		// TTL'i tazele
 		config.RedisClient.Expire(ctx, watchKey, 15*time.Minute)
 	}
 
-	var matchedReq *MatchRequest
-	var matchDeliveryTag uint64
-	var nackedTags []uint64
-	sawMyself := false
-
-	// Mesajları kuyruktan çekelim (maksimum 10 kişiye bakar)
-	for i := 0; i < 10; i++ {
-		msg, ok, err := config.RabbitChannel.Get(queueName, false)
-		if err != nil || !ok {
-			break
-		}
-
-		var req MatchRequest
-		if err := json.Unmarshal(msg.Body, &req); err != nil {
-			config.RabbitChannel.Nack(msg.DeliveryTag, false, false) // Hatalı mesaj çöpe
-			continue
-		}
-
-		// Kullanıcı bu istekten sonra "iptal" tuşuna bastıysa, kuyruğu kaba temizlemek yerine
-		// iptal flag'ine bakarak sadece ilgili mesajı düşük maliyetle çöpe atıyoruz.
-		cancelKey := fmt.Sprintf("match_cancelled:%s:%d", req.UserID, req.TmdbID)
-		if val, err := config.RedisClient.Get(ctx, cancelKey).Result(); err == nil && val == "1" {
-			// Bu istek iptal edilmiş, kalıcı olarak sil
-			_ = config.RabbitChannel.Ack(msg.DeliveryTag, false)
-			continue
-		}
-
-		if req.UserID == userId {
-			sawMyself = true
-			// HATA DÜZELTME: Kendi mesajımızı tekrar kuyruğa koymak (nack) yerine,
-			// kalıcı olarak silmeliyiz (ack). Yoksa iptal-arama döngüsünde hatalı eski isteklerle kendimizle eşleşiriz.
-			_ = config.RabbitChannel.Ack(msg.DeliveryTag, false)
-			continue
-		}
-
-		targetID, _ := primitive.ObjectIDFromHex(req.UserID)
-
-		// Engellenme Kontrolü
-		blockedCount, _ := userCol.CountDocuments(ctx, bson.M{
-			"$or": bson.A{
-				bson.M{"_id": myObjID, "blocked_users": targetID},
-				bson.M{"_id": targetID, "blocked_users": myObjID},
-			},
-		})
-
-		if blockedCount > 0 {
-			nackedTags = append(nackedTags, msg.DeliveryTag)
-			continue
-		}
-
-		// Aynı şehir filtresi:
-		// Taraflardan biri "şehrimde ara" modundaysa şehirler birebir eşleşmeli.
-		if localOnly || req.LocalOnly {
-			myCity := strings.TrimSpace(strings.ToLower(myUser.City))
-			targetCity := strings.TrimSpace(strings.ToLower(req.City))
-			if myCity == "" || targetCity == "" || myCity != targetCity {
-				nackedTags = append(nackedTags, msg.DeliveryTag)
-				continue
-			}
-		}
-
-		// Öncelikli Eşleşme (History-Based Matching)
-		// Daha önce unmatch yapılmış mı?
-		unmatchedPrior := false
-		for _, uID := range myUser.UnmatchedUsers {
-			if uID == targetID {
-				unmatchedPrior = true
-				break
-			}
-		}
-
-		// Karşı taraf beni unmatch yaptıysa onlardan da kontrol edebiliriz ama
-		// user_controller.go içinde UnmatchUser yapıldığında ZATEN İKİ TARAF DA BİRBİRİNE EKLENDİ.
-		// Yani kendi listemde varsa o zaten beni unmatch listesine eklemiştir. Mükemmel.
-
-		// Olasılık zarı: Hiç eşleşmemiş için %50 (veya direkt %100 yapabiliriz ama planda 50 dediniz)
-		// Plandaki örnek: "Hiç eşleşmemiş %50, iptal edilmiş %25".
-		// Bu demek oluyor ki normalde bile %50 şansla eşleşiyor, geçmişi varsa %25.
-		// Random yerine zaman damgası / math.rand kullanabiliriz.
-		// math/rand kütüphanesini kullanmamız lazım. Time bazlı random:
-		randVal := time.Now().UnixNano() % 100 // 0-99 arası
-		threshold := int64(50)                // No history = 50%
-		if unmatchedPrior {
-			threshold = 25 // History = 25% chance
-		}
-
-		if randVal >= threshold { // thresh 50 ise (50-99 arası reject) -> %50 fail.
-			nackedTags = append(nackedTags, msg.DeliveryTag)
-			continue
-		}
-
-		// EŞLEŞTİK!
-		matchedReq = &req
-		matchDeliveryTag = msg.DeliveryTag
-		break
+	// Eşleşme isteği oluştur
+	req := MatchRequest{
+		UserID:    userId,
+		Username:  myUser.Username,
+		City:      myUser.City,
+		LocalOnly: localOnly,
+		TmdbID:    tmdbID,
+		MovieName: myStatus.MovieName,
+		Timestamp: time.Now().Unix(),
 	}
 
-	// Bakılan ve eşleşilmeyen (veya kendim olan) mesajları kuyruğa iade et
-	for _, tag := range nackedTags {
-		_ = config.RabbitChannel.Nack(tag, false, true) // requeue = true
-	}
-
-	if matchedReq != nil {
-		// Mesajı tüket
-		_ = config.RabbitChannel.Ack(matchDeliveryTag, false)
-
-		roomID := primitive.NewObjectID().Hex()
-
-		result := &MatchResult{
-			RoomID:    roomID,
-			User1ID:   userId,
-			User1Name: myUser.Username,
-			User2ID:   matchedReq.UserID,
-			User2Name: matchedReq.Username,
-			TmdbID:    tmdbID,
-			MovieName: myStatus.MovieName,
+	// Redis havuzunda eşleşme ara
+	if candidatePool != nil {
+		result, err := candidatePool.FindMatch(tmdbID, req, &myUser)
+		if err != nil {
+			log.Printf("⚠️ Eşleşme hatası: %v", err)
+			// Fallback: RabbitMQ kuyruğuna ekle
+			_ = PublishMatchRequest(req)
+			return nil, nil
 		}
-
-		answerJSON, _ := json.Marshal(result)
-
-		// Odayı Redis'e kaydet
-		config.RedisClient.Set(ctx, "chatroom:"+roomID, answerJSON, 4*time.Hour)
-
-		// Karşı tarafın poll'layabilmesi için onun adıyla Redis'e 15 saniyeliğine kaydet
-		config.RedisClient.Set(ctx, "user_match:"+matchedReq.UserID, answerJSON, 15*time.Second)
-
-		// Eşleşme sağlandığı için bekleyenler listesinden ikisini de çıkar
-		config.RedisClient.ZRem(ctx, "match_queue_active", userId, matchedReq.UserID)
-
-		log.Printf("🎉 RabbitMQ Match! %s ↔ %s (%s)", myUser.Username, matchedReq.Username, myStatus.MovieName)
-		return result, nil
-	}
-
-	// Kuyrukta kendimizi bile görmediysek ve eşleşmediysek talebimizi Publish edelim (Yani kuyruğa biz de girelim)
-	if !sawMyself {
-		req := MatchRequest{
-			UserID:    userId,
-			Username:  myUser.Username,
-			City:      myUser.City,
-			LocalOnly: localOnly,
-			TmdbID:    tmdbID,
-			MovieName: myStatus.MovieName,
-			Timestamp: time.Now().Unix(),
+		if result != nil {
+			// Aktif listeden kaldır
+			config.RedisClient.ZRem(ctx, "match_queue_active", fmt.Sprintf("%d:%s", tmdbID, userId))
+			return result, nil
 		}
-		_ = PublishMatchRequest(req)
+		// Havuzda eşleşme yok, RabbitMQ'ya düş
+	} else {
+		log.Printf("⚠️ Candidate pool başlatılmamış, RabbitMQ'ya yönlendiriliyor")
 	}
+
+	// Eşleşme yok, kendini havuza ekle
+	PublishMatchRequest(req)
 
 	return nil, nil
 }
 
-// CancelMatchRequest — Eşleşme aramasını iptal eder.
-// Kuyruk taramak yerine, "cancel marker" yazarız; tüketim sırasında bu flag'e bakılıp
-// ilgili mesajlar düşük maliyetle ayıklanır.
+// CancelMatchRequest — Eşleşme aramasını iptal eder
 func CancelMatchRequest(userId string, tmdbID int) error {
-	ctx := context.Background()
-
-	// Bu kullanıcının bu film için aktif talebinin iptal edildiğini işaretle
+	// İptal işareti koy
 	cancelKey := fmt.Sprintf("match_cancelled:%s:%d", userId, tmdbID)
 	if err := config.RedisClient.Set(ctx, cancelKey, "1", 2*time.Minute).Err(); err != nil {
 		log.Printf("⚠️ match cancel marker set failed userId=%s tmdbId=%d err=%v", userId, tmdbID, err)
 	}
 
-	// Bekleyenler listesinden çıkar
-	config.RedisClient.ZRem(ctx, "match_queue_active", userId)
+	// Havuzdan kaldır
+	if candidatePool != nil {
+		candidatePool.RemoveCandidate(tmdbID, userId)
+	}
 
-	log.Printf("🛑 Eşleşme araması iptal edildi: %s (cancel marker yazıldı)", userId)
+	// Aktif listeden kaldır
+	config.RedisClient.ZRem(ctx, "match_queue_active", fmt.Sprintf("%d:%s", tmdbID, userId))
+
+	log.Printf("🛑 Eşleşme araması iptal edildi: %s (tmdbID: %d)", userId, tmdbID)
 	return nil
 }
 
-// GetTotalQueueCount — Şu anda aktif olarak eşleşme arayan (kuyrukta olan) kullanıcı sayısını getirir
+// GetTotalQueueCount — Aktif eşleşme arayan kullanıcı sayısını döner
 func GetTotalQueueCount() (int, error) {
-	ctx := context.Background()
-
-	// Zamanı geçenleri (1 dakikadan eski pingleri) bekleyenlerden temizle
+	// Süresi dolmuşları temizle
 	minScore := "-inf"
 	maxScore := strconv.FormatInt(time.Now().Add(-1*time.Minute).Unix(), 10)
 	config.RedisClient.ZRemRangeByScore(ctx, "match_queue_active", minScore, maxScore)
 
-	// Kalan taze eleman (aktif arayan) sayısını say
 	count, err := config.RedisClient.ZCard(ctx, "match_queue_active").Result()
 	if err != nil {
 		return 0, err
@@ -342,25 +507,18 @@ func GetTotalQueueCount() (int, error) {
 	return int(count), nil
 }
 
-// AcceptMatchAndGetRoom — Kullanıcı eşleşmeyi kabul ettiğinde çağrılır.
-// Her iki taraf kabul edince, odaDaha önce sohbet varsa onu döner, yoksa yeni oda oluşturulmuştur.
-// Strateji: Redis'e accept:{roomId}:{userId} = "1" olarak 90 saniye yazılır.
-// Her iki kullanıcı yazılmışsa → "bothAccepted: true, roomId: ..."
-// Bot: Kabul edilmeden önce süresi dolan key silinir.
+// AcceptMatchAndGetRoom — Kullanıcı eşleşmeyi kabul ettiğinde çağrılır
 func AcceptMatchAndGetRoom(userId, roomID, targetUserId string) (map[string]interface{}, error) {
-	ctx := context.Background()
-
-	// Kendi kabul key'ini yaz (10 dakika geçerli — güvenli süre)
+	// Kabul işareti koy
 	acceptKey := fmt.Sprintf("accept:%s:%s", roomID, userId)
 	config.RedisClient.Set(ctx, acceptKey, "1", 10*time.Minute)
 
-	// Karşı tarafın da kabul edip etmediğini kontrol et
+	// Karşı tarafın kabulünü kontrol et
 	targetAcceptKey := fmt.Sprintf("accept:%s:%s", roomID, targetUserId)
 	targetVal, err := config.RedisClient.Get(ctx, targetAcceptKey).Result()
 	bothAccepted := err == nil && targetVal == "1"
 
 	if bothAccepted {
-		// İkisi de kabul etti → mevcut sohbet oda varsa bul, yoksa yeni oluştur
 		finalRoomID, err := getOrCreateChatRoom(ctx, userId, targetUserId, roomID)
 		if err != nil {
 			return nil, err
@@ -371,25 +529,21 @@ func AcceptMatchAndGetRoom(userId, roomID, targetUserId string) (map[string]inte
 		}, nil
 	}
 
-	// Sadece ben kabul ettim, karşı taraf henüz kabul etmedi
 	return map[string]interface{}{
 		"bothAccepted": false,
 		"roomId":       "",
 	}, nil
 }
 
-// GetAcceptStatus — Polling için: karşı taraf kabul etti mi?
-// Query: roomId, targetUserId
+// GetAcceptStatus — Kabul durumunu sorgular
 func GetAcceptStatus(userId, roomID string) (map[string]interface{}, error) {
-	ctx := context.Background()
-
-	// Önce red kontrolü yap
+	// Red kontrolü
 	rejectedKey := "rejected:" + roomID
 	if val, err := config.RedisClient.Get(ctx, rejectedKey).Result(); err == nil && val == "1" {
 		return map[string]interface{}{"bothAccepted": false, "rejected": true}, nil
 	}
 
-	// Oda kaydından targetUserId'yi bul
+	// Oda bilgisini al
 	chatroomKey := "chatroom:" + roomID
 	roomData, err := config.RedisClient.Get(ctx, chatroomKey).Result()
 	if err != nil {
@@ -401,13 +555,13 @@ func GetAcceptStatus(userId, roomID string) (map[string]interface{}, error) {
 		return map[string]interface{}{"bothAccepted": false}, nil
 	}
 
-	// targetUserId = karşı taraf
+	// Target user ID
 	targetUserId := matchResult.User2ID
 	if targetUserId == userId {
 		targetUserId = matchResult.User1ID
 	}
 
-	// Karşı tarafın accept key'ini kontrol et
+	// Karşı tarafın kabul durumu
 	targetAcceptKey := fmt.Sprintf("accept:%s:%s", roomID, targetUserId)
 	targetVal, err := config.RedisClient.Get(ctx, targetAcceptKey).Result()
 	if err != nil || targetVal != "1" {
@@ -426,12 +580,11 @@ func GetAcceptStatus(userId, roomID string) (map[string]interface{}, error) {
 	}, nil
 }
 
-// getOrCreateChatRoom — İki kullanıcı arasında daha önce sohbet odası varsa döner, yoksa var olanı kullanır.
-// MongoDB'deki "chatrooms" koleksiyonunda user pair bazlı arama yapar.
+// getOrCreateChatRoom — İki kullanıcı arasında sohbet odası oluşturur
 func getOrCreateChatRoom(ctx context.Context, userId, targetUserId, fallbackRoomID string) (string, error) {
 	col := config.GetCollection(config.DB, "chatrooms")
 
-	// Sıralamadan bağımsız eşleşme: her iki permütasyonu da ara
+	// Önceki oda var mı kontrol et
 	filter := bson.M{
 		"$or": bson.A{
 			bson.M{"user1Id": userId, "user2Id": targetUserId},
@@ -444,7 +597,7 @@ func getOrCreateChatRoom(ctx context.Context, userId, targetUserId, fallbackRoom
 	}
 	err := col.FindOne(ctx, filter).Decode(&existing)
 	if err == nil && existing.RoomID != "" {
-		// Debug: mevcut oda bulunursa hangi metadata ile dönüldüğünü gözlemle
+		// Mevcut odanın durumunu kontrol et
 		var existingRoomMeta struct {
 			RoomID    string `bson:"roomId"`
 			User1ID   string `bson:"user1Id"`
@@ -455,15 +608,11 @@ func getOrCreateChatRoom(ctx context.Context, userId, targetUserId, fallbackRoom
 		}
 		if errMeta := col.FindOne(ctx, bson.M{"roomId": existing.RoomID}).Decode(&existingRoomMeta); errMeta != nil {
 			log.Printf("🔎 getOrCreateChatRoom existing room meta read failed roomId=%s err=%v", existing.RoomID, errMeta)
-		} else {
-			log.Printf("🔎 getOrCreateChatRoom reusing existing room roomId=%s user1Id=%s user2Id=%s status=%q movieName=%q posterUrlEmpty=%t", existingRoomMeta.RoomID, existingRoomMeta.User1ID, existingRoomMeta.User2ID, existingRoomMeta.Status, existingRoomMeta.MovieName, strings.TrimSpace(existingRoomMeta.PosterURL) == "")
 		}
-		// Daha önce sohbet edilmiş oda tekrar kullanılıyor.
-		// Eğer geçmişte unmatch nedeniyle status "unmatched" kaldıysa,
-		// yeni eşleşmede aktif sohbeti açabilmek için status'u resetle.
+
+		// Unmatched durumu resetle
 		if existingRoomMeta.Status == "unmatched" {
-			updateRes, updateErr := col.UpdateOne(
-				ctx,
+			col.UpdateOne(ctx,
 				bson.M{"roomId": existing.RoomID},
 				bson.M{
 					"$set": bson.M{
@@ -474,33 +623,22 @@ func getOrCreateChatRoom(ctx context.Context, userId, targetUserId, fallbackRoom
 						"unmatchedBy": "",
 						"unmatchedAt": "",
 					},
-				},
-			)
-			_ = updateRes
-			if updateErr != nil {
-				log.Printf("⚠️ getOrCreateChatRoom stale unmatched status reset failed roomId=%s err=%v", existing.RoomID, updateErr)
-			}
+				})
 		}
 
-		// Daha önce sohbet edilmiş → aynı odayı döndür
 		return existing.RoomID, nil
 	}
 
-	// İlk kez eşleşiyorlar → fallbackRoomID'yi MongoDB'ye kaydet ve döndür
-	// Redis'teki chatroom key'inden film bilgisini çek
+	// Yeni oluştur
 	var movieName, posterUrl string
 	if roomData, err2 := config.RedisClient.Get(ctx, "chatroom:"+fallbackRoomID).Result(); err2 == nil {
 		var matchResult MatchResult
 		if errUnmarshal := json.Unmarshal([]byte(roomData), &matchResult); errUnmarshal == nil {
 			movieName = matchResult.MovieName
-			log.Printf("🔎 getOrCreateChatRoom redis chatroom hit roomId=%s movieName=%q", fallbackRoomID, movieName)
-		} else {
-			log.Printf("🔎 getOrCreateChatRoom redis chatroom decode failed roomId=%s err=%v", fallbackRoomID, errUnmarshal)
 		}
-	} else {
-		log.Printf("🔎 getOrCreateChatRoom redis chatroom miss roomId=%s err=%v", fallbackRoomID, err2)
 	}
-	insertRes, insertErr := col.InsertOne(ctx, bson.M{
+
+	col.InsertOne(ctx, bson.M{
 		"roomId":    fallbackRoomID,
 		"user1Id":   userId,
 		"user2Id":   targetUserId,
@@ -508,75 +646,72 @@ func getOrCreateChatRoom(ctx context.Context, userId, targetUserId, fallbackRoom
 		"posterUrl": posterUrl,
 		"createdAt": time.Now(),
 	})
-	if insertErr != nil {
-		log.Printf("🔎 getOrCreateChatRoom insert failed roomId=%s user1Id=%s user2Id=%s movieName=%q err=%v", fallbackRoomID, userId, targetUserId, movieName, insertErr)
-	} else {
-		log.Printf("🔎 getOrCreateChatRoom inserted roomId=%s insertedId=%v movieName=%q posterUrlEmpty=%t", fallbackRoomID, insertRes.InsertedID, movieName, strings.TrimSpace(posterUrl) == "")
 
-		var user1, user2 struct {
-			Username  string `bson:"username"`
-			AvatarURL string `bson:"avatarUrl"`
-		}
-		userCol := config.GetCollection(config.DB, "users")
-
-		objId1, _ := primitive.ObjectIDFromHex(userId)
-		objId2, _ := primitive.ObjectIDFromHex(targetUserId)
-
-		_ = userCol.FindOne(ctx, bson.M{"_id": objId1}).Decode(&user1)
-		_ = userCol.FindOne(ctx, bson.M{"_id": objId2}).Decode(&user2)
-
-		notifCol := config.GetCollection(config.DB, "notifications")
-		messageStr1 := fmt.Sprintf("%s ile %s filmini izlerken eşleştiniz!", user2.Username, movieName)
-		messageStr2 := fmt.Sprintf("%s ile %s filmini izlerken eşleştiniz!", user1.Username, movieName)
-
-		_, _ = notifCol.InsertMany(ctx, []interface{}{
-			bson.M{
-				"userId":    userId,
-				"type":      "match",
-				"senderId":  targetUserId,
-				"title":     "Yeni Eşleşme",
-				"message":   messageStr1,
-				"avatar":    user2.AvatarURL,
-				"isRead":    false,
-				"createdAt": time.Now(),
-			},
-			bson.M{
-				"userId":    targetUserId,
-				"type":      "match",
-				"senderId":  userId,
-				"title":     "Yeni Eşleşme",
-				"message":   messageStr2,
-				"avatar":    user1.AvatarURL,
-				"isRead":    false,
-				"createdAt": time.Now(),
-			},
-		})
+	// Bildirimler oluştur
+	userCol := config.GetCollection(config.DB, "users")
+	var user1, user2 struct {
+		Username  string `bson:"username"`
+		AvatarURL string `bson:"avatarUrl"`
 	}
 
-	// Odanın Redis'te zaten var olduğunu varsay (CheckForMatch sırasında yazıldı)
+	objId1, _ := primitive.ObjectIDFromHex(userId)
+	objId2, _ := primitive.ObjectIDFromHex(targetUserId)
+
+	_ = userCol.FindOne(ctx, bson.M{"_id": objId1}).Decode(&user1)
+	_ = userCol.FindOne(ctx, bson.M{"_id": objId2}).Decode(&user2)
+
+	notifCol := config.GetCollection(config.DB, "notifications")
+	messageStr1 := fmt.Sprintf("%s ile %s filmini izlerken eşleştiniz!", user2.Username, movieName)
+	messageStr2 := fmt.Sprintf("%s ile %s filmini izlerken eşleştiniz!", user1.Username, movieName)
+
+	notifCol.InsertMany(ctx, []interface{}{
+		bson.M{
+			"userId":    userId,
+			"type":      "match",
+			"senderId":  targetUserId,
+			"title":     "Yeni Eşleşme",
+			"message":   messageStr1,
+			"avatar":    user2.AvatarURL,
+			"isRead":    false,
+			"createdAt": time.Now(),
+		},
+		bson.M{
+			"userId":    targetUserId,
+			"type":      "match",
+			"senderId":  userId,
+			"title":     "Yeni Eşleşme",
+			"message":   messageStr2,
+			"avatar":    user1.AvatarURL,
+			"isRead":    false,
+			"createdAt": time.Now(),
+		},
+	})
+
 	log.Printf("💬 Yeni sohbet odası kaydedildi: %s (%s ↔ %s)", fallbackRoomID, userId, targetUserId)
 	return fallbackRoomID, nil
 }
 
-// RejectMatch — Eşleşmeyi reddeden kullanıcı arama havuzunda kalmaya devam edecek.
-// Ancak aynı anda hemen tekrar eşleşmemeleri veya önbellekte aynı eşleşmenin dönmemesi için
-// "user_match:userId" Redis key'i temizlenir ve kabul durumu sıfırlanır.
+// RejectMatch — Eşleşmeyi reddeder
 func RejectMatch(userId, roomID, targetUserId string) error {
-	ctx := context.Background()
-
-	// 1. Red flag'i koy ki karşı taraf polling ile anında algılasın (30 saniye yeterli)
+	// Red işareti koy
 	rejectedKey := "rejected:" + roomID
 	config.RedisClient.Set(ctx, rejectedKey, "1", 30*time.Second)
 
-	// 2. Her iki tarafın "match cache" objesini temizle ki birbirleriyle hemen kilitlenmesinler
+	// Cache'leri temizle
 	config.RedisClient.Del(ctx, "user_match:"+userId)
 	config.RedisClient.Del(ctx, "user_match:"+targetUserId)
-
-	// 3. Kabul eden taraf (target veya biz) "accept" basmış olabilir, onları da temizle
 	config.RedisClient.Del(ctx, "accept:"+roomID+":"+userId)
 	config.RedisClient.Del(ctx, "accept:"+roomID+":"+targetUserId)
 	config.RedisClient.Del(ctx, "chatroom:"+roomID)
 
 	log.Printf("🛑 Eşleşme reddedildi: %s vs %s", userId, targetUserId)
 	return nil
+}
+
+// GetMatchPoolSize — Belirli bir filmin havuzundaki kişi sayısını döner
+func GetMatchPoolSize(tmdbID int) int {
+	if candidatePool != nil {
+		return candidatePool.GetPoolSize(tmdbID)
+	}
+	return 0
 }

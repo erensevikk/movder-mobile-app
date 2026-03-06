@@ -21,11 +21,79 @@ import (
 )
 
 // ─── WebSocket Yapılandırması ────────────────────────────────
+
+// Rate limiter yapısı: IP -> sayac + son istek zamanı
+type rateLimiter struct {
+	count    int
+	lastSeen time.Time
+}
+
+var (
+	rateLimitMap = make(map[string]*rateLimiter)
+	rateLimitMu  sync.Mutex
+
+	// Rate limiting ayarları
+	wsRateLimitMaxConns = 100              // IP başına max eşzamanlı bağlantı
+	wsRateLimitWindow   = 60 * time.Second // Pencere süresi
+	wsRateLimitPurge    = 5 * time.Minute  // Temizleme aralığı
+)
+
+// cleanupRateLimitMap Eski rate limit entries temizler
+func cleanupRateLimitMap() {
+	ticker := time.NewTicker(wsRateLimitPurge)
+	for range ticker.C {
+		rateLimitMu.Lock()
+		now := time.Now()
+		for ip, rl := range rateLimitMap {
+			if now.Sub(rl.lastSeen) > wsRateLimitPurge {
+				delete(rateLimitMap, ip)
+			}
+		}
+		rateLimitMu.Unlock()
+	}
+}
+
+// isRateLimited IP'nin rate limit aşıp aşmadığını kontrol eder
+func isRateLimited(ip string) bool {
+	rateLimitMu.Lock()
+	defer rateLimitMu.Unlock()
+
+	rl, exists := rateLimitMap[ip]
+	now := time.Now()
+
+	if !exists || now.Sub(rl.lastSeen) > wsRateLimitWindow {
+		// Yeni veya süresi dolmuş - resetle
+		rateLimitMap[ip] = &rateLimiter{count: 1, lastSeen: now}
+		return false
+	}
+
+	if rl.count >= wsRateLimitMaxConns {
+		return true
+	}
+
+	rl.count++
+	rl.lastSeen = now
+	return false
+}
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 	CheckOrigin: func(r *http.Request) bool {
-		return true // Geliştirme aşamasında tüm origin'lere izin ver
+		origin := r.Header.Get("Origin")
+
+		// Development: tüm origin'lere izin ver
+		if config.GetAllowedOrigins() == "*" {
+			return true
+		}
+
+		// Production: sadece whitelist'teki origin'lere izin ver
+		if origin != "" && !config.IsOriginAllowed(origin) {
+			log.Printf("⚠️  WebSocket origin reddedildi: %s", origin)
+			return false
+		}
+
+		return true
 	},
 }
 
@@ -46,6 +114,11 @@ type ChatMessage struct {
 	Status     string             `json:"status" bson:"status"` // "sent", "delivered", "read"
 }
 
+// init Rate limiting cleanup goroutine'ı başlat
+func init() {
+	go cleanupRateLimitMap()
+}
+
 // WebSocket için temel limit ve timeout ayarları
 const (
 	wsMaxMessageSize         = 64 * 1024        // 64KB
@@ -61,15 +134,23 @@ func HandleWebSocket() gin.HandlerFunc {
 		roomID := c.Param("roomId")
 		tokenStr := c.Query("token")
 
+		// 0. Rate limiting kontrolü (IP bazlı)
+		clientIP := c.ClientIP()
+		if isRateLimited(clientIP) {
+			log.Printf("⚠️  WebSocket rate limit aşıldı: %s", clientIP)
+			errorResponse(c, http.StatusTooManyRequests, "RATE_LIMIT_EXCEEDED", "Çok fazla bağlantı isteği", nil)
+			return
+		}
+
 		// 1. JWT doğrulaması
 		if tokenStr == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Token gerekli"})
+			errorResponse(c, http.StatusUnauthorized, "MISSING_TOKEN", "Token gerekli", nil)
 			return
 		}
 
 		userId, username, err := validateWSToken(tokenStr)
 		if err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Geçersiz token"})
+			errorResponse(c, http.StatusUnauthorized, "INVALID_TOKEN", "Geçersiz token", nil)
 			return
 		}
 
@@ -86,7 +167,7 @@ func HandleWebSocket() gin.HandlerFunc {
 			},
 		}).Err()
 		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Sohbet odası bulunamadı"})
+			errorResponse(c, http.StatusNotFound, "CHAT_ROOM_NOT_FOUND", "Sohbet odası bulunamadı", nil)
 			return
 		}
 
@@ -318,42 +399,80 @@ func broadcastToRoom(roomID string, msg ChatMessage) {
 	}
 }
 
-// saveChatMessage — Mesajı MongoDB'ye asenkron kaydeder
+// saveChatMessage — Mesajı MongoDB'ye worker pool üzerinden kaydeder
+// Backpressure: buffer dolunca task reddedilir, memory pressure önelnir
 func saveChatMessage(msg ChatMessage) {
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+	if config.MessagePersistencePool == nil {
+		// Fallback: pool yoksa doğrudan kaydet (init henüz tamamlanmamış olabilir)
+		saveChatMessageDirect(msg)
+		return
+	}
 
-		collection := config.GetCollection(config.DB, "messages")
-		_, err := collection.InsertOne(ctx, msg)
-		if err != nil {
-			log.Println("Mesaj kaydedilemedi:", err)
-		}
-	}()
+	success := config.MessagePersistencePool.Submit(
+		func(payload interface{}) {
+			m := payload.(ChatMessage)
+			saveChatMessageDirect(m)
+		},
+		msg,
+	)
+	if !success {
+		// Backpressure: mesaj kaydedilemedi, logla
+		log.Printf("⚠️  Mesaj kaydedilemedi (pool dolu): %s", msg.RoomID)
+	}
+}
+
+// saveChatMessageDirect — Mesajı MongoDB'ye asenkron kaydeder (direct implementation)
+func saveChatMessageDirect(msg ChatMessage) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	collection := config.GetCollection(config.DB, "messages")
+	_, err := collection.InsertOne(ctx, msg)
+	if err != nil {
+		log.Println("Mesaj kaydedilemedi:", err)
+	}
 }
 
 // markMessagesAsRead — Bir odadaki tüm okunmamış mesajları 'read' statüsüne çeker
+// Worker pool kullanarak backpressure uygula
 func markMessagesAsRead(roomID string, userId string) {
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+	if config.ReadReceiptPool == nil {
+		markMessagesAsReadDirect(roomID, userId)
+		return
+	}
 
-		collection := config.GetCollection(config.DB, "messages")
-		// Benim dışımda gönderilen (senderId'si farklı olan) ve odaya ait mesajların statusünü read yap
-		filter := bson.M{
-			"roomId":   roomID,
-			"senderId": bson.M{"$ne": userId},
-			"status":   bson.M{"$in": []string{"sent", "delivered"}},
-		}
-		update := bson.M{
-			"$set": bson.M{"status": "read"},
-		}
+	success := config.ReadReceiptPool.Submit(
+		func(payload interface{}) {
+			params := payload.(map[string]string)
+			markMessagesAsReadDirect(params["roomID"], params["userId"])
+		},
+		map[string]string{"roomID": roomID, "userId": userId},
+	)
+	if !success {
+		log.Printf("⚠️  Read receipt güncellenemedi (pool dolu): %s", roomID)
+	}
+}
 
-		_, err := collection.UpdateMany(ctx, filter, update)
-		if err != nil {
-			log.Println("Mesajlar read olarak işaretlenemedi:", err)
-		}
-	}()
+// markMessagesAsReadDirect — Bir odadaki tüm okunmamış mesajları 'read' statüsüne çeker (direct)
+func markMessagesAsReadDirect(roomID string, userId string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	collection := config.GetCollection(config.DB, "messages")
+	// Benim dışımda gönderilen (senderId'si farklı olan) ve odaya ait mesajların statusünü read yap
+	filter := bson.M{
+		"roomId":   roomID,
+		"senderId": bson.M{"$ne": userId},
+		"status":   bson.M{"$in": []string{"sent", "delivered"}},
+	}
+	update := bson.M{
+		"$set": bson.M{"status": "read"},
+	}
+
+	_, err := collection.UpdateMany(ctx, filter, update)
+	if err != nil {
+		log.Println("Mesajlar read olarak işaretlenemedi:", err)
+	}
 }
 
 // findChatRoomIDBetweenUsers - iki kullanıcı arasındaki mevcut sohbet odasını bulur.
@@ -381,9 +500,13 @@ func findChatRoomIDBetweenUsers(ctx context.Context, userA, userB string) (strin
 // GET /api/chat/rooms
 func GetChatRooms() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userId := c.GetString("userId")
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel, _ := requestContext(c)
 		defer cancel()
+
+		userId, ok := mustUserID(c)
+		if !ok {
+			return
+		}
 
 		roomsCol := config.GetCollection(config.DB, "chatrooms")
 		msgsCol := config.GetCollection(config.DB, "messages")
@@ -399,7 +522,7 @@ func GetChatRooms() gin.HandlerFunc {
 
 		cursor, err := roomsCol.Find(ctx, filter)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Sohbet odaları alınamadı"})
+			errorResponse(c, http.StatusInternalServerError, "CHAT_ROOMS_QUERY_FAILED", "Sohbet odaları alınamadı", err.Error())
 			return
 		}
 		defer cursor.Close(ctx)
@@ -418,7 +541,7 @@ func GetChatRooms() gin.HandlerFunc {
 		var rooms []RoomDoc
 		if err := cursor.All(ctx, &rooms); err != nil {
 			log.Printf("🔎 GetChatRooms rooms cursor.All failed userId=%s err=%v", userId, err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Sohbet odaları alınamadı"})
+			errorResponse(c, http.StatusInternalServerError, "CHAT_ROOMS_READ_FAILED", "Sohbet odaları alınamadı", err.Error())
 			return
 		}
 
@@ -670,17 +793,21 @@ func GetChatMessages() gin.HandlerFunc {
 // DELETE /api/chat/rooms/:roomId
 func HideChatRoom() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userId := c.GetString("userId")
+		ctx, cancel, _ := requestContext(c)
+		defer cancel()
+
+		userId, ok := mustUserID(c)
+		if !ok {
+			return
+		}
+
 		roomID := c.Param("roomId")
 		log.Printf("🧪 CHAT-DELETE-DBG start userId=%s roomId=%s", userId, roomID)
 		if roomID == "" {
 			log.Printf("🧪 CHAT-DELETE-DBG bad-request userId=%s roomId-empty", userId)
-			c.JSON(http.StatusBadRequest, gin.H{"error": "roomId gerekli"})
+			errorResponse(c, http.StatusBadRequest, "INVALID_ROOM_ID", "roomId gerekli", nil)
 			return
 		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
 
 		roomsCol := config.GetCollection(config.DB, "chatrooms")
 		err := roomsCol.FindOne(ctx, bson.M{
@@ -692,7 +819,7 @@ func HideChatRoom() gin.HandlerFunc {
 		}).Err()
 		if err != nil {
 			log.Printf("🧪 CHAT-DELETE-DBG forbidden userId=%s roomId=%s err=%v", userId, roomID, err)
-			c.JSON(http.StatusForbidden, gin.H{"error": "Bu odayı gizleme yetkiniz yok"})
+			errorResponse(c, http.StatusForbidden, "FORBIDDEN", "Bu odayı gizleme yetkiniz yok", nil)
 			return
 		}
 
@@ -704,7 +831,7 @@ func HideChatRoom() gin.HandlerFunc {
 		now := time.Now().Unix()
 		if _, err := config.RedisClient.HSet(ctx, hiddenKey, roomID, fmt.Sprintf("%d", now)).Result(); err != nil {
 			log.Printf("🧪 CHAT-DELETE-DBG redis-hset-failed userId=%s roomId=%s key=%s err=%v", userId, roomID, hiddenKey, err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Sohbet gizlenemedi"})
+			errorResponse(c, http.StatusInternalServerError, "CHAT_HIDE_FAILED", "Sohbet gizlenemedi", err.Error())
 			return
 		}
 		_ = config.RedisClient.Expire(ctx, hiddenKey, 180*24*time.Hour).Err()

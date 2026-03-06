@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import '../models/movie.dart';
 import 'auth_service.dart';
@@ -9,6 +9,54 @@ import 'auth_service.dart';
 class ApiService {
   // Android emülatörden localhost'a erişim için özel IP
   static const String baseUrl = 'http://10.0.2.2:8080';
+
+  static Future<http.Response> get(String path) async {
+    final token = AuthService.token;
+    return http.get(
+      Uri.parse('$baseUrl$path'),
+      headers: {
+        'Content-Type': 'application/json',
+        if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+      },
+    );
+  }
+
+  static Future<http.Response> put(
+      String path, Map<String, dynamic> body) async {
+    final token = AuthService.token;
+    return http.put(
+      Uri.parse('$baseUrl$path'),
+      headers: {
+        'Content-Type': 'application/json',
+        if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+      },
+      body: jsonEncode(body),
+    );
+  }
+
+  static Future<http.Response> post(
+      String path, Map<String, dynamic> body) async {
+    final token = AuthService.token;
+    return http.post(
+      Uri.parse('$baseUrl$path'),
+      headers: {
+        'Content-Type': 'application/json',
+        if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+      },
+      body: jsonEncode(body),
+    );
+  }
+
+  static Future<http.Response> delete(String path) async {
+    final token = AuthService.token;
+    return http.delete(
+      Uri.parse('$baseUrl$path'),
+      headers: {
+        'Content-Type': 'application/json',
+        if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+      },
+    );
+  }
 
   /// Film arama — Go backend'deki /search endpoint'ini çağırır
   static Future<List<Movie>> searchMovies(String query) async {
@@ -105,6 +153,80 @@ class ApiService {
         return jsonDecode(response.body) as Map<String, dynamic>;
       }
 
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<Map<String, dynamic>?> getPrivacySettings() async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return null;
+
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/api/account/privacy'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final settings = data['privacySettings'];
+        if (settings is Map<String, dynamic>) {
+          return settings;
+        }
+        if (settings is Map) {
+          return Map<String, dynamic>.from(settings);
+        }
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<Map<String, dynamic>?> updatePrivacySettings({
+    String? watchingVisibility,
+    String? profileVisibility,
+    bool? searchDiscoverable,
+  }) async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return null;
+
+    final body = <String, dynamic>{};
+    if (watchingVisibility != null) {
+      body['watchingVisibility'] = watchingVisibility;
+    }
+    if (profileVisibility != null) {
+      body['profileVisibility'] = profileVisibility;
+    }
+    if (searchDiscoverable != null) {
+      body['searchDiscoverable'] = searchDiscoverable;
+    }
+
+    try {
+      final response = await http.put(
+        Uri.parse('$baseUrl/api/account/privacy'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode(body),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final settings = data['privacySettings'];
+        if (settings is Map<String, dynamic>) {
+          return settings;
+        }
+        if (settings is Map) {
+          return Map<String, dynamic>.from(settings);
+        }
+      }
       return null;
     } catch (_) {
       return null;
@@ -699,13 +821,19 @@ class ApiService {
   }
 
   /// Aktif eşleşme arar
-  static Future<Map<String, dynamic>?> checkMatch(int tmdbId) async {
+  static Future<Map<String, dynamic>?> checkMatch(
+    int tmdbId, {
+    bool localOnly = false,
+  }) async {
     final token = AuthService.token;
     if (token == null || token.isEmpty) return null;
 
     try {
+      final uri = Uri.parse(
+        '$baseUrl/api/match/check?tmdbId=$tmdbId&localOnly=${localOnly ? '1' : '0'}',
+      );
       final response = await http.get(
-        Uri.parse('$baseUrl/api/match/check?tmdbId=$tmdbId'),
+        uri,
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',
@@ -985,6 +1113,34 @@ class ApiService {
       return [];
     } catch (_) {
       return [];
+    }
+  }
+
+  /// Sohbeti yalnızca mevcut kullanıcı için gizler (sohbet listesinden kaldırır)
+  static Future<bool> hideChatRoom(String roomId) async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) {
+      debugPrint('[CHAT-DELETE-DBG][API] token missing roomId=$roomId');
+      return false;
+    }
+
+    try {
+      final uri = Uri.parse('$baseUrl/api/chat/rooms/$roomId');
+      debugPrint('[CHAT-DELETE-DBG][API] DELETE $uri roomId=$roomId');
+      final response = await http.delete(
+        uri,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      ).timeout(const Duration(seconds: 10));
+
+      debugPrint(
+          '[CHAT-DELETE-DBG][API] response status=${response.statusCode} body=${response.body}');
+      return response.statusCode == 200;
+    } catch (e) {
+      debugPrint('[CHAT-DELETE-DBG][API] exception roomId=$roomId err=$e');
+      return false;
     }
   }
 }

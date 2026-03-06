@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:intl/intl.dart';
 import '../services/api_service.dart';
 import '../services/global_chat_service.dart';
@@ -20,7 +21,10 @@ class _ChatListScreenState extends State<ChatListScreen> {
   bool _isLoading = true;
   StreamSubscription<String>? _messageEventsSub;
   Timer? _refreshDebounce;
-  final Set<String> _hiddenRoomIds = <String>{};
+
+  bool _isSearching = false;
+  String _searchQuery = '';
+  final TextEditingController _searchController = TextEditingController();
 
   @override
   void initState() {
@@ -41,7 +45,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
     final rooms = await ApiService.getChatRooms();
     if (!mounted) return;
     setState(() {
-      _chats = _applyHiddenFilter(rooms);
+      _chats = rooms;
       _isLoading = false;
     });
 
@@ -56,26 +60,41 @@ class _ChatListScreenState extends State<ChatListScreen> {
     final rooms = await ApiService.getChatRooms();
     if (!mounted) return;
     setState(() {
-      _chats = _applyHiddenFilter(rooms);
+      _chats = rooms;
       _isLoading = false;
     });
   }
 
-  List<Map<String, dynamic>> _applyHiddenFilter(
-      List<Map<String, dynamic>> rooms) {
-    if (_hiddenRoomIds.isEmpty) return rooms;
-    return rooms.where((room) {
-      final roomId = (room['roomId'] ?? '').toString();
-      return roomId.isNotEmpty && !_hiddenRoomIds.contains(roomId);
-    }).toList();
-  }
-
   void _hideChatCard(String roomId) {
     if (roomId.isEmpty) return;
+    debugPrint('[CHAT-DELETE-DBG][UI] hide local card roomId=$roomId');
     setState(() {
-      _hiddenRoomIds.add(roomId);
       _chats.removeWhere((c) => (c['roomId'] ?? '').toString() == roomId);
     });
+  }
+
+  Future<void> _deleteChatForMe(String roomId) async {
+    if (roomId.isEmpty) return;
+    debugPrint('[CHAT-DELETE-DBG][UI] delete requested roomId=$roomId');
+    _hideChatCard(roomId); // Kullanıcı aksiyonunda kartı anında kaldır.
+    // Global WS tarafında da bu odayı dinlemek gereksiz hâle geldi.
+    GlobalChatService.instance.removeRoom(roomId);
+
+    final success = await ApiService.hideChatRoom(roomId);
+    debugPrint(
+        '[CHAT-DELETE-DBG][UI] delete result roomId=$roomId success=$success');
+    if (!mounted) return;
+
+    if (success) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Sohbet sunucuda silinemedi, ama bu ekranda gizlendi.',
+        ),
+        backgroundColor: Colors.orangeAccent,
+      ),
+    );
   }
 
   @override
@@ -90,6 +109,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
   void dispose() {
     _refreshDebounce?.cancel();
     _messageEventsSub?.cancel();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -112,6 +132,15 @@ class _ChatListScreenState extends State<ChatListScreen> {
       totalUnread += (c['unreadCount'] as int? ?? 0);
     }
 
+    List<Map<String, dynamic>> displayedChats = _chats;
+    if (_isSearching && _searchQuery.trim().isNotEmpty) {
+      final queryLower = _searchQuery.trim().toLowerCase();
+      displayedChats = _chats.where((c) {
+        final username = (c['username']?.toString() ?? '').toLowerCase();
+        return username.contains(queryLower);
+      }).toList();
+    }
+
     return Scaffold(
       backgroundColor: const Color(0xFF0F0F0F),
       body: SafeArea(
@@ -124,44 +153,81 @@ class _ChatListScreenState extends State<ChatListScreen> {
                   const EdgeInsets.symmetric(horizontal: 20.0, vertical: 20.0),
               child: Row(
                 children: [
-                  // Sol: Başlık + alt açıklama
-                  const Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Sohbetler',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 28,
-                            fontWeight: FontWeight.bold,
+                  // Sol: Başlık + alt açıklama veya Arama Inputu
+                  Expanded(
+                    child: _isSearching
+                        ? TextField(
+                            controller: _searchController,
+                            autofocus: true,
+                            style: const TextStyle(
+                                color: Colors.white, fontSize: 16),
+                            onChanged: (val) {
+                              setState(() {
+                                _searchQuery = val;
+                              });
+                            },
+                            decoration: const InputDecoration(
+                              hintText: 'Sohbetlerde ara...',
+                              hintStyle: TextStyle(color: Colors.white38),
+                              border: InputBorder.none,
+                            ),
+                          )
+                        : Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Sohbetler',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .headlineLarge,
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'Eşleşmelerinden gelen mesajlar',
+                                style: Theme.of(context)
+                                        .textTheme
+                                        .bodySmall
+                                        ?.copyWith(
+                                          color: Colors.white60,
+                                          fontWeight: FontWeight.w500,
+                                        ) ??
+                                    const TextStyle(
+                                      color: Colors.white60,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                              ),
+                            ],
                           ),
-                        ),
-                        SizedBox(height: 4),
-                        Text(
-                          'Eşleşmelerinden gelen mesajlar',
-                          style: TextStyle(
-                            color: Colors.white38,
-                            fontSize: 14,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
-                    ),
                   ),
                   // Sağ: Arama ikonu
-                  Container(
-                    width: 42,
-                    height: 42,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF1E1E1E),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.white12),
-                    ),
-                    child: const Icon(
-                      Icons.search_rounded,
-                      color: Colors.white54,
-                      size: 22,
+                  GestureDetector(
+                    onTap: () {
+                      setState(() {
+                        if (_isSearching) {
+                          _isSearching = false;
+                          _searchQuery = '';
+                          _searchController.clear();
+                        } else {
+                          _isSearching = true;
+                        }
+                      });
+                    },
+                    child: Container(
+                      width: 42,
+                      height: 42,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1E1E1E),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.white12),
+                      ),
+                      child: Icon(
+                        _isSearching
+                            ? Icons.close_rounded
+                            : Icons.search_rounded,
+                        color: Colors.white54,
+                        size: 22,
+                      ),
                     ),
                   ),
                 ],
@@ -233,16 +299,18 @@ class _ChatListScreenState extends State<ChatListScreen> {
               child: _isLoading
                   ? const Center(
                       child: CircularProgressIndicator(color: Colors.redAccent))
-                  : _chats.isEmpty
-                      ? const Center(
+                  : displayedChats.isEmpty
+                      ? Center(
                           child: Text(
-                            'Henüz hiç eşleşmen veya sohbetin yok.',
-                            style: TextStyle(color: Colors.white54),
+                            _isSearching
+                                ? 'Aradığınız kişiyle sohbet bulunamadı.'
+                                : 'Henüz hiç eşleşmen veya sohbetin yok.',
+                            style: const TextStyle(color: Colors.white54),
                           ),
                         )
                       : ListView.separated(
                           padding: const EdgeInsets.symmetric(horizontal: 20),
-                          itemCount: _chats.length,
+                          itemCount: displayedChats.length,
                           separatorBuilder: (_, __) => Padding(
                             padding: const EdgeInsets.symmetric(vertical: 4),
                             child: Divider(
@@ -251,7 +319,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
                             ),
                           ),
                           itemBuilder: (context, index) {
-                            final chat = _chats[index];
+                            final chat = displayedChats[index];
                             final avatarRaw =
                                 (chat['avatarUrl'] ?? '').toString().trim();
                             final avatarUrl = avatarRaw.isEmpty
@@ -267,7 +335,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
 
                             return _SwipeToDeleteChatItem(
                               key: ValueKey('chat-swipe-$roomId-$index'),
-                              onDelete: () => _hideChatCard(roomId),
+                              onDelete: () => _deleteChatForMe(roomId),
                               child: _ChatCard(
                                 username: chat['username']?.toString() ??
                                     'Bilinmeyen',
@@ -284,13 +352,18 @@ class _ChatListScreenState extends State<ChatListScreen> {
                                     _formatTime(chat['lastTimestamp'] as int?),
                                 unreadCount: (chat['unreadCount'] as int?) ?? 0,
                                 onTap: () {
+                                  final roomId =
+                                      chat['roomId']?.toString() ?? '';
+                                  final roomStatus =
+                                      chat['status']?.toString() ?? '';
+                                  final isUnmatched = roomStatus == 'unmatched';
                                   Navigator.of(context)
                                       .push(
                                     MaterialPageRoute(
                                       builder: (_) => ChatDetailScreen(
                                         targetUserId:
                                             chat['targetUserId']?.toString(),
-                                        roomId: chat['roomId']?.toString(),
+                                        roomId: roomId,
                                         username:
                                             chat['username']?.toString() ?? '',
                                         avatarSeed:
@@ -304,6 +377,9 @@ class _ChatListScreenState extends State<ChatListScreen> {
                                         moviePoster:
                                             chat['moviePoster']?.toString(),
                                         initialMessages: const [], // Geçmiş içeride çekilecek
+                                        isUnmatched: isUnmatched,
+                                        unmatchedByUserId:
+                                            chat['unmatchedBy']?.toString(),
                                       ),
                                     ),
                                   )
@@ -386,10 +462,17 @@ class _ChatCard extends StatelessWidget {
                   ),
                   child: ClipOval(
                     child: avatarUrl.isNotEmpty
-                        ? Image.network(
-                            avatarUrl,
+                        ? CachedNetworkImage(
+                            imageUrl: avatarUrl,
                             fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) => const Icon(
+                            placeholder: (_, __) => const Center(
+                              child: Icon(
+                                Icons.person,
+                                color: Colors.white38,
+                                size: 22,
+                              ),
+                            ),
+                            errorWidget: (_, __, ___) => const Icon(
                               Icons.person,
                               color: Colors.white54,
                               size: 22,
@@ -572,6 +655,8 @@ class _SwipeToDeleteChatItemState extends State<_SwipeToDeleteChatItem> {
   void _handleDragEnd(DragEndDetails details, double width) {
     final dismissThreshold = width * _dismissThresholdRatio;
     if (-_offsetX >= dismissThreshold) {
+      debugPrint(
+          '[CHAT-DELETE-DBG][UI] drag dismiss triggered offset=$_offsetX width=$width');
       widget.onDelete();
       return;
     }
@@ -603,7 +688,10 @@ class _SwipeToDeleteChatItemState extends State<_SwipeToDeleteChatItem> {
                     child: Center(
                       child: IconButton(
                         icon: const Icon(Icons.delete, color: Colors.white),
-                        onPressed: widget.onDelete,
+                        onPressed: () {
+                          debugPrint('[CHAT-DELETE-DBG][UI] trash tapped');
+                          widget.onDelete();
+                        },
                       ),
                     ),
                   ),
@@ -615,9 +703,19 @@ class _SwipeToDeleteChatItemState extends State<_SwipeToDeleteChatItem> {
               onHorizontalDragUpdate: _handleDragUpdate,
               onHorizontalDragEnd: (d) =>
                   _handleDragEnd(d, constraints.maxWidth),
-              onTap: () {
+              onTapUp: (TapUpDetails details) {
                 if (_offsetX != 0) {
-                  setState(() => _offsetX = 0);
+                  // Kartın görsel sağ kenarı (negatif offset olduğu için)
+                  final cardRight = constraints.maxWidth + _offsetX;
+                  if (details.localPosition.dx > cardRight) {
+                    // Çöp kutusu alanına basıldı → sil
+                    debugPrint(
+                        '[CHAT-DELETE-DBG][UI] onTapUp → trash area tapped');
+                    widget.onDelete();
+                  } else {
+                    // Kart alanına basıldı → geri kapat
+                    setState(() => _offsetX = 0);
+                  }
                   return;
                 }
               },

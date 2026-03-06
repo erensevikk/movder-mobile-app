@@ -40,6 +40,11 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
     super.dispose();
   }
 
+  bool get _canSeeProfileDetails {
+    if (widget.isMe) return true;
+    return _profileData?['canSeeProfileDetails'] != false;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -55,11 +60,20 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
         ? await ApiService.getProfile()
         : await ApiService.getUserProfile(widget.userId);
 
-    // Kendi listelerimiziyse getir
     List<Map<String, dynamic>> listsData = [];
     if (widget.isMe) {
       listsData = await ApiService.getMyLists();
       // Her liste için film içeriklerini çekelim
+      for (var list in listsData) {
+        final id = list['id'] ?? list['_id'];
+        if (id != null) {
+          list['items'] = await ApiService.getListItems(id.toString());
+        } else {
+          list['items'] = [];
+        }
+      }
+    } else if (data?['canSeeProfileDetails'] == true) {
+      listsData = await ApiService.getUserLists(widget.userId);
       for (var list in listsData) {
         final id = list['id'] ?? list['_id'];
         if (id != null) {
@@ -255,29 +269,33 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
               bottom: 0,
               child: GestureDetector(
                 onTap: widget.isMe ? _pickAndUploadImage : null,
-                child: Container(
-                  width: avatarSize,
-                  height: avatarSize,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: const Color(0xFF1E1E1E),
-                    border:
-                        Border.all(color: const Color(0xFF0F0F0F), width: 4),
-                    image: avatarUrl != null && avatarUrl.isNotEmpty
-                        ? DecorationImage(
-                            image:
-                                NetworkImage('${ApiService.baseUrl}$avatarUrl'),
-                            fit: BoxFit.cover,
-                          )
-                        : null,
-                  ),
-                  child: avatarUrl == null || avatarUrl.isEmpty
-                      ? const Icon(
-                          Icons.person,
-                          size: 50,
-                          color: Colors.white54,
-                        )
-                      : null,
+                child: Stack(
+                  children: [
+                    Container(
+                      width: avatarSize,
+                      height: avatarSize,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: const Color(0xFF1E1E1E),
+                        border: Border.all(
+                            color: const Color(0xFF0F0F0F), width: 4),
+                        image: avatarUrl != null && avatarUrl.isNotEmpty
+                            ? DecorationImage(
+                                image: NetworkImage(
+                                    '${ApiService.baseUrl}$avatarUrl'),
+                                fit: BoxFit.cover,
+                              )
+                            : null,
+                      ),
+                      child: avatarUrl == null || avatarUrl.isEmpty
+                          ? const Icon(
+                              Icons.person,
+                              size: 50,
+                              color: Colors.white54,
+                            )
+                          : null,
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -430,13 +448,17 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
                   ),
                 )
               : Text(
-                  _descriptionController.text.isNotEmpty
-                      ? _descriptionController.text
-                      : (hasDescription
-                          ? description
-                          : 'Seni tanımlayan bir şeyler yaz...'),
+                  !widget.isMe && !_canSeeProfileDetails
+                      ? 'Bu profil detayları yalnızca arkadaşlarına açık.'
+                      : _descriptionController.text.isNotEmpty
+                          ? _descriptionController.text
+                          : (hasDescription
+                              ? description
+                              : 'Seni tanımlayan bir şeyler yaz...'),
                   style: TextStyle(
-                    color: hasDescription ? Colors.white54 : Colors.white38,
+                    color: (!widget.isMe && !_canSeeProfileDetails)
+                        ? Colors.white54
+                        : (hasDescription ? Colors.white54 : Colors.white38),
                     fontSize: 14,
                     height: 1.4,
                   ),
@@ -532,10 +554,13 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
             fit: StackFit.expand,
             children: [
               InteractiveViewer(
-                child: Image.network(
-                  imageUrl,
+                child: CachedNetworkImage(
+                  imageUrl: imageUrl,
                   fit: BoxFit.contain,
-                  errorBuilder: (_, __, ___) => const Center(
+                  placeholder: (_, __) => const Center(
+                    child: CircularProgressIndicator(color: Colors.redAccent),
+                  ),
+                  errorWidget: (_, __, ___) => const Center(
                     child: Icon(Icons.broken_image,
                         color: Colors.white38, size: 64),
                   ),
@@ -627,6 +652,32 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
   }
 
   Widget _buildFavoriteFilmsOrEmptyState() {
+    if (!widget.isMe && !_canSeeProfileDetails) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(20, 48, 20, 20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'FAVORI FILMLER',
+              style: TextStyle(
+                color: Colors.white54,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 1.2,
+              ),
+            ),
+            const SizedBox(height: 16),
+            _buildPrivacyInfoCard(
+              icon: Icons.lock_outline,
+              text:
+                  'Bu kullanıcı favori filmlerini sadece arkadaşlarıyla paylaşıyor.',
+            ),
+          ],
+        ),
+      );
+    }
+
     // Kullanıcının listelerden herhangi birinde film var mı?
     final hasContent = _userLists.any((list) {
       final items = list['items'] as List? ?? [];
@@ -887,14 +938,12 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
   }
 
   Widget _buildUserListsSection() {
-    if (!widget.isMe) {
-      return const SizedBox
-          .shrink(); // Şimdilik sadece isMe'de listeleri gösteriyoruz.
+    if (!widget.isMe && !_canSeeProfileDetails) {
+      return const SizedBox.shrink();
     }
 
     if (_userLists.isEmpty) {
-      return const SizedBox
-          .shrink(); // Hiç liste yoksa gereksiz yer kaplamasın.
+      return const SizedBox.shrink();
     }
 
     return Column(
@@ -924,28 +973,27 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                  if (widget.isMe)
-                    GestureDetector(
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => ListDetailScreen(
-                              listData: userList,
-                              isMe: widget.isMe,
-                            ),
+                  GestureDetector(
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => ListDetailScreen(
+                            listData: userList,
+                            isMe: widget.isMe,
                           ),
-                        ).then((_) => _fetchProfile());
-                      },
-                      child: const Text(
-                        'Listeyi Düzenle',
-                        style: TextStyle(
-                          color: Colors.white70,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
                         ),
+                      ).then((_) => _fetchProfile());
+                    },
+                    child: Text(
+                      widget.isMe ? 'Listeyi Düzenle' : 'Tümünü Gör',
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
+                  ),
                 ],
               ),
               const SizedBox(height: 16),
@@ -1576,6 +1624,32 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
   }
 
   Widget _buildRecentActivity() {
+    if (!widget.isMe && !_canSeeProfileDetails) {
+      return Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'IZLEME GECMISI',
+              style: TextStyle(
+                color: Colors.white54,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 1.2,
+              ),
+            ),
+            const SizedBox(height: 16),
+            _buildPrivacyInfoCard(
+              icon: Icons.visibility_off_outlined,
+              text:
+                  'Bu kullanıcının izleme geçmişi sadece arkadaşlarına açık.',
+            ),
+          ],
+        ),
+      );
+    }
+
     final history = (_profileData?['watchHistory'] as List?) ?? [];
 
     return Padding(
@@ -1630,6 +1704,36 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
                 },
               ),
             ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPrivacyInfoCard({
+    required IconData icon,
+    required String text,
+  }) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E1E1E),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white10),
+      ),
+      child: Column(
+        children: [
+          Icon(icon, color: Colors.white38, size: 36),
+          const SizedBox(height: 12),
+          Text(
+            text,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Colors.white54,
+              fontSize: 14,
+              height: 1.4,
+            ),
+          ),
         ],
       ),
     );

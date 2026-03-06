@@ -1,10 +1,15 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
 import '../main.dart';
 import 'login_screen.dart';
 import 'user_detail_screen.dart';
+import 'settings_screen.dart';
+import 'settings/notification_settings_screen.dart';
+import 'settings/privacy_settings_screen.dart';
+import 'settings/help_support_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -145,10 +150,13 @@ class ProfileScreenState extends State<ProfileScreen> {
             fit: StackFit.expand,
             children: [
               InteractiveViewer(
-                child: Image.network(
-                  imageUrl,
+                child: CachedNetworkImage(
+                  imageUrl: imageUrl,
                   fit: BoxFit.contain,
-                  errorBuilder: (_, __, ___) => const Center(
+                  placeholder: (_, __) => const Center(
+                    child: CircularProgressIndicator(color: Colors.redAccent),
+                  ),
+                  errorWidget: (_, __, ___) => const Center(
                     child: Icon(Icons.broken_image,
                         color: Colors.white38, size: 64),
                   ),
@@ -206,10 +214,13 @@ class ProfileScreenState extends State<ProfileScreen> {
     return Stack(
       fit: StackFit.expand,
       children: [
-        Image.network(
-          'https://image.tmdb.org/t/p/w780/xbiycuc84TrieEWwkkuH2hoEa9S.jpg',
+        CachedNetworkImage(
+          imageUrl:
+              'https://image.tmdb.org/t/p/w780/xbiycuc84TrieEWwkkuH2hoEa9S.jpg',
           fit: BoxFit.cover,
-          errorBuilder: (_, __, ___) =>
+          placeholder: (_, __) =>
+              Container(color: const Color(0xFF0F0F0F)),
+          errorWidget: (_, __, ___) =>
               Container(color: const Color(0xFF0F0F0F)),
         ),
         BackdropFilter(
@@ -565,15 +576,67 @@ class ProfileScreenState extends State<ProfileScreen> {
           ),
         ),
         const SizedBox(height: 16),
-        _buildSettingsItem(Icons.person_outline, 'Hesap'),
-        _buildSettingsItem(Icons.notifications_none, 'Bildirimler'),
-        _buildSettingsItem(Icons.lock_outline, 'Gizlilik'),
-        _buildSettingsItem(Icons.help_outline, 'Yardım ve Destek'),
+        _buildSettingsItem(
+          icon: Icons.person_outline,
+          title: 'Hesap Ayarları',
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const SettingsScreen()),
+            ).then((_) {
+              // Geri dönüldüğünde token silinmişse profile ekranını güncelle
+              if (AuthService.token == null && _isLoggedIn) {
+                setState(() => _isLoggedIn = false);
+              } else if (_isLoggedIn) {
+                _loadProfile();
+              }
+            });
+          },
+        ),
+        _buildSettingsItem(
+          icon: Icons.notifications_none,
+          title: 'Bildirimler',
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                  builder: (_) => const NotificationSettingsScreen()),
+            );
+          },
+        ),
+        _buildSettingsItem(
+          icon: Icons.lock_outline,
+          title: 'Gizlilik',
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => const PrivacySettingsScreen(),
+              ),
+            );
+          },
+        ),
+        _buildSettingsItem(
+          icon: Icons.help_outline,
+          title: 'Yardım ve Destek',
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => const HelpSupportScreen(),
+              ),
+            );
+          },
+        ),
       ],
     );
   }
 
-  Widget _buildSettingsItem(IconData icon, String title) {
+  Widget _buildSettingsItem({
+    required IconData icon,
+    required String title,
+    required VoidCallback onTap,
+  }) {
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
@@ -592,11 +655,7 @@ class ProfileScreenState extends State<ProfileScreen> {
           ),
         ),
         trailing: const Icon(Icons.chevron_right, color: Colors.white38),
-        onTap: () {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('$title ekranı yakında eklenecek')),
-          );
-        },
+        onTap: onTap,
       ),
     );
   }
@@ -652,8 +711,8 @@ class ProfileScreenState extends State<ProfileScreen> {
   }
 
   Widget _buildTwitterStyleHeader() {
-    const double coverHeight = 100.0;
-    const double avatarSize = 88.0;
+    const double coverHeight = 135.0;
+    const double avatarSize = 90.0;
 
     return Container(
       color: const Color(0xFF0F0F0F),
@@ -682,10 +741,12 @@ class ProfileScreenState extends State<ProfileScreen> {
                       : _favoritePosterUrl.isNotEmpty
                           ? _favoritePosterUrl
                           : 'https://image.tmdb.org/t/p/w780/2ssWTSVklAEc98frZUQhgtGHx7s.jpg';
-                  return Image.network(
-                    url,
+                  return CachedNetworkImage(
+                    imageUrl: url,
                     fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) =>
+                    placeholder: (_, __) =>
+                        Container(color: const Color(0xFF1E1E1E)),
+                    errorWidget: (_, __, ___) =>
                         Container(color: const Color(0xFF1E1E1E)),
                   );
                 }(),
@@ -710,36 +771,58 @@ class ProfileScreenState extends State<ProfileScreen> {
               ),
               // Avatar — artık Stack sınırları İÇİNDE
               Positioned(
-                left: 20,
+                left: 7,
                 bottom: 0,
                 child: GestureDetector(
                   onTap: _avatarUrl.isNotEmpty
                       ? () => _showFullScreenImage(
                           '${ApiService.baseUrl}$_avatarUrl')
                       : null,
-                  child: Container(
-                    width: avatarSize,
-                    height: avatarSize,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: const Color(0xFF1E1E1E),
-                      border:
-                          Border.all(color: const Color(0xFF0F0F0F), width: 4),
-                      image: _avatarUrl.isNotEmpty
-                          ? DecorationImage(
-                              image: NetworkImage(
-                                  '${ApiService.baseUrl}$_avatarUrl'),
-                              fit: BoxFit.cover,
-                            )
-                          : null,
-                    ),
-                    child: _avatarUrl.isEmpty
-                        ? const Icon(
-                            Icons.person,
-                            size: 50,
-                            color: Colors.white54,
-                          )
-                        : null,
+                  child: Stack(
+                    children: [
+                      Container(
+                        width: avatarSize,
+                        height: avatarSize,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: const Color(0xFF1E1E1E),
+                          border: Border.all(
+                              color: const Color(0xFF0F0F0F), width: 4),
+                          image: _avatarUrl.isNotEmpty
+                              ? DecorationImage(
+                                  image: NetworkImage(
+                                      '${ApiService.baseUrl}$_avatarUrl'),
+                                  fit: BoxFit.cover,
+                                )
+                              : null,
+                        ),
+                        child: _avatarUrl.isEmpty
+                            ? const Icon(
+                                Icons.person,
+                                size: 50,
+                                color: Colors.white54,
+                              )
+                            : null,
+                      ),
+                      // Durum Noktası (Sağ alt köşe)
+                      Positioned(
+                        right: 4,
+                        bottom: 4,
+                        child: Container(
+                          width: 22,
+                          height: 22,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: _isWatching
+                                ? Colors.redAccent
+                                : const Color(
+                                    0xFF4CAF50), // Yeşil (Çevrimiçi) veya Kırmızı (İzliyor). Kendi profilimiz olduğundan hep çevrimiçi.
+                            border: Border.all(
+                                color: const Color(0xFF0F0F0F), width: 4),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -823,7 +906,7 @@ class ProfileScreenState extends State<ProfileScreen> {
             width: 8,
             height: 8,
             decoration: const BoxDecoration(
-              color: Colors.greenAccent,
+              color: Colors.redAccent,
               shape: BoxShape.circle,
             ),
           ),
@@ -831,8 +914,8 @@ class ProfileScreenState extends State<ProfileScreen> {
           Flexible(
             child: Text(
               '$_watchingMovieName izliyor — $_watchingFor',
-              style: const TextStyle(
-                color: Colors.white70,
+              style: TextStyle(
+                color: Colors.redAccent.withValues(alpha: 0.9),
                 fontSize: 12,
                 fontWeight: FontWeight.w500,
               ),
@@ -844,3 +927,5 @@ class ProfileScreenState extends State<ProfileScreen> {
     );
   }
 }
+
+

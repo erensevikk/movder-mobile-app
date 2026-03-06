@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../services/api_service.dart';
 import '../services/chat_service.dart';
 import '../services/global_chat_service.dart';
@@ -14,6 +16,8 @@ class ChatDetailScreen extends StatefulWidget {
   final List<Map<String, dynamic>> initialMessages;
   final String? targetUserId; // Backend id (null ise buton devre dışı)
   final String? roomId;
+  final bool isUnmatched;
+  final String? unmatchedByUserId;
 
   const ChatDetailScreen({
     super.key,
@@ -26,6 +30,8 @@ class ChatDetailScreen extends StatefulWidget {
     this.initialMessages = const [],
     this.targetUserId,
     this.roomId,
+    this.isUnmatched = false,
+    this.unmatchedByUserId,
   });
 
   @override
@@ -46,6 +52,13 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   String _friendStatus = 'none';
   bool _isFriendLoading = false;
   String? _myUserId;
+  Timer? _friendStatusPollTimer;
+  bool _isUnmatched = false;
+  bool _unmatchedByMe = false;
+  int _friendStatusRequestSeq = 0;
+  int _friendStatusWsVersion = 0;
+  final GlobalKey _friendsMenuAnchorKey = GlobalKey();
+  double? _friendsMenuWidth;
 
   // ── Hızlı Mesajlar (ilk mesaj için) ──────────────────────
   static const List<String> _quickMessages = [
@@ -61,8 +74,10 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   void initState() {
     super.initState();
     _messages = List<Map<String, dynamic>>.from(widget.initialMessages);
+    _isUnmatched = widget.isUnmatched;
     _loadMyUserId();
-    _loadFriendStatus();
+    _loadFriendStatus(trigger: 'init');
+    _startFriendStatusPolling();
     _setupWebSocket();
     // Bu odaya girdiğimizde global dinleyiciye haber ver
     // Böylece aynı odadan gelen mesajlar bildirim balonu olarak gösterilmez
@@ -77,6 +92,11 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       setState(() {
         _myUserId =
             (profile['userId'] ?? profile['_id'] ?? profile['id'])?.toString();
+        if (_isUnmatched) {
+          final unmatchedByUserId = widget.unmatchedByUserId ?? '';
+          _unmatchedByMe =
+              unmatchedByUserId.isNotEmpty && unmatchedByUserId == _myUserId;
+        }
       });
       // Geçmiş mesajları yükle
       if (widget.roomId != null) {
@@ -120,6 +140,27 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
 
     final date = DateTime.fromMillisecondsSinceEpoch(timestamp * 1000);
     return DateFormat('HH:mm').format(date);
+  }
+
+  void _captureFriendsMenuWidth() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final ctx = _friendsMenuAnchorKey.currentContext;
+      if (ctx == null) return;
+      final ro = ctx.findRenderObject();
+      if (ro is! RenderBox) return;
+
+      final measured = ro.size.width;
+      if (measured <= 0) return;
+      if (_friendsMenuWidth != measured) {
+        setState(() {
+          _friendsMenuWidth = measured;
+        });
+        debugPrint(
+          '[FRIENDS-MENU-WIDTH-DBG] measured friends_button_width=$measured',
+        );
+      }
+    });
   }
 
   void _setupWebSocket() {
@@ -208,8 +249,19 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
             }
           }
         });
+      } else if (type == 'friend_status_changed') {
+        _friendStatusWsVersion++;
+        final wsVersion = _friendStatusWsVersion;
+        _applyOptimisticFriendStatusFromEvent(msg, wsVersion: wsVersion);
+        _loadFriendStatus(trigger: 'ws_event', minWsVersion: wsVersion);
       } else if (type == 'unmatch') {
-        _handleUnmatchState();
+        final senderId = msg['senderId']?.toString() ?? '';
+        if (mounted) {
+          setState(() {
+            _isUnmatched = true;
+            _unmatchedByMe = senderId.isNotEmpty && senderId == _myUserId;
+          });
+        }
       }
     });
 
@@ -231,14 +283,93 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     });
   }
 
-  Future<void> _loadFriendStatus() async {
+  void _applyOptimisticFriendStatusFromEvent(Map<String, dynamic> msg,
+      {required int wsVersion}) {
+    final senderId = msg['senderId']?.toString();
+    final receiverId = msg['receiverId']?.toString();
+    final targetUserId = widget.targetUserId;
+    final myUserId = _myUserId;
+
+    if (senderId == null || receiverId == null || targetUserId == null) {
+      return;
+    }
+    if (myUserId == null) {
+      return;
+    }
+
+    String? optimistic;
+
+    // Karşı taraf bir aksiyon yaptıysa
+    if (senderId == targetUserId && receiverId == myUserId) {
+      if (_friendStatus == 'none') {
+        optimistic = 'pending_received';
+      } else if (_friendStatus == 'pending_sent') {
+        optimistic = 'friends';
+      } else if (_friendStatus == 'friends') {
+        optimistic = 'none';
+      }
+    }
+
+    // Ben aksiyon yaptıysam (diğer cihaz/senaryo geri yankısı)
+    if (senderId == myUserId && receiverId == targetUserId) {
+      if (_friendStatus == 'none') {
+        optimistic = 'pending_sent';
+      } else if (_friendStatus == 'pending_received') {
+        optimistic = 'friends';
+      } else if (_friendStatus == 'pending_sent' ||
+          _friendStatus == 'friends') {
+        optimistic = 'none';
+      }
+    }
+
+    if (optimistic == null || optimistic == _friendStatus) {
+      return;
+    }
+
+    if (mounted) {
+      setState(() => _friendStatus = optimistic!);
+    }
+  }
+
+  Future<void> _loadFriendStatus(
+      {String trigger = 'manual', int? minWsVersion}) async {
     if (widget.targetUserId == null) return;
+
+    final requestId = ++_friendStatusRequestSeq;
+    final requestStartWsVersion = _friendStatusWsVersion;
+
     final status = await ApiService.getFriendStatus(widget.targetUserId!);
-    if (mounted) setState(() => _friendStatus = status);
+
+    if (!mounted) return;
+
+    if (requestId != _friendStatusRequestSeq) {
+      return;
+    }
+
+    if (trigger == 'polling' &&
+        requestStartWsVersion < _friendStatusWsVersion) {
+      return;
+    }
+
+    if (minWsVersion != null && _friendStatusWsVersion > minWsVersion) {
+      return;
+    }
+
+    setState(() => _friendStatus = status);
+  }
+
+  void _startFriendStatusPolling() {
+    if (widget.targetUserId == null) return;
+    _friendStatusPollTimer?.cancel();
+    _friendStatusPollTimer = Timer.periodic(
+      const Duration(seconds: 2),
+      (_) => _loadFriendStatus(trigger: 'polling'),
+    );
   }
 
   @override
   void dispose() {
+    _friendStatusPollTimer?.cancel();
     // Chat ekranından çıkınca global dinleyicide aktif oda bayrağını sıfırla
     GlobalChatService.instance.clearActiveRoom();
     // Ekrandan çıkınca websocket'i kapat; aksi halde odada var görünmeye devam eder
@@ -250,6 +381,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   }
 
   void _sendMessage(String text) {
+    if (_isUnmatched) return;
     if (text.trim().isEmpty) return;
 
     // Sadece chat servisine yolla, mesaj servisten geldiğinde (echoed) veya lokalden eklenmesi gerektiğinde stream'den listeye eklenecek
@@ -278,7 +410,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       case 'friends':
         return Colors.greenAccent;
       case 'pending_sent':
-        return Colors.blueAccent;
+        return Colors.orangeAccent;
       default:
         return Colors.redAccent;
     }
@@ -287,9 +419,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   IconData get _friendButtonIcon {
     switch (_friendStatus) {
       case 'friends':
-        return Icons.favorite_rounded;
+        return Icons.check_rounded;
       case 'pending_sent':
-        return Icons.hourglass_top_rounded;
+        return Icons.cancel_schedule_send_rounded;
       default:
         return Icons.person_add_alt_1_rounded;
     }
@@ -298,9 +430,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   String get _friendButtonLabel {
     switch (_friendStatus) {
       case 'friends':
-        return 'Arkadaş';
+        return 'Arkadaşlar';
       case 'pending_sent':
-        return 'İstek gönderildi';
+        return 'İsteği İptal Et';
       default:
         return 'Arkadaş Ekle';
     }
@@ -357,6 +489,33 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     );
   }
 
+  Future<void> _cancelSentFriendRequest() async {
+    if (widget.targetUserId == null) return;
+    setState(() => _isFriendLoading = true);
+
+    final success = await ApiService.removeFriend(widget.targetUserId!);
+    if (!mounted) return;
+
+    setState(() => _isFriendLoading = false);
+    if (success) {
+      setState(() => _friendStatus = 'none');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Arkadaşlık isteği iptal edildi.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('İstek iptal edilemedi.'),
+          backgroundColor: Colors.red,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
   Future<void> _respondToRequest(bool accept) async {
     if (widget.targetUserId == null) return;
     setState(() => _isFriendLoading = true);
@@ -400,6 +559,63 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     }
   }
 
+  Future<void> _showRemoveFriendConfirmDialog() async {
+    if (widget.targetUserId == null) return;
+
+    final shouldRemove = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        title:
+            const Text('Arkadaşı Sil', style: TextStyle(color: Colors.white)),
+        content: Text(
+          '${widget.username} adlı kullanıcıyı arkadaş listesinden kaldırmak istiyor musun?',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child:
+                const Text('Vazgeç', style: TextStyle(color: Colors.white54)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child:
+                const Text('Onayla', style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldRemove != true) return;
+
+    setState(() => _isFriendLoading = true);
+    final success = await ApiService.removeFriend(widget.targetUserId!);
+    if (!mounted) return;
+
+    setState(() => _isFriendLoading = false);
+
+    if (success) {
+      setState(() => _friendStatus = 'none');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Arkadaşlıktan çıkarıldı.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      _loadFriendStatus(trigger: 'remove_friend_confirmed');
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Arkadaşlıktan çıkarma başarısız.'),
+        backgroundColor: Colors.red,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final bool hasMessages = _messages.isNotEmpty;
@@ -424,11 +640,14 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                 // ── Film Posteri Arka Plan ──────────────────────
                 if (poster != null && poster.isNotEmpty)
                   Positioned.fill(
-                    child: Image.network(
-                      poster,
+                    child: CachedNetworkImage(
+                      imageUrl: poster,
                       fit: BoxFit.cover,
                       filterQuality: FilterQuality.high,
-                      errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                      placeholder: (_, __) => Container(
+                        color: const Color(0xFF1E1E1E),
+                      ),
+                      errorWidget: (_, __, ___) => const SizedBox.shrink(),
                     ),
                   ),
 
@@ -516,10 +735,17 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                 child: ClipOval(
                   child: (widget.avatarUrl != null &&
                           widget.avatarUrl!.trim().isNotEmpty)
-                      ? Image.network(
-                          widget.avatarUrl!,
+                      ? CachedNetworkImage(
+                          imageUrl: widget.avatarUrl!,
                           fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) => const Icon(
+                          placeholder: (_, __) => const Center(
+                            child: Icon(
+                              Icons.person,
+                              color: Colors.white38,
+                              size: 22,
+                            ),
+                          ),
+                          errorWidget: (_, __, ___) => const Icon(
                             Icons.person,
                             color: Colors.white54,
                             size: 22,
@@ -592,7 +818,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
           ),
 
           // Sağ: Arkadaş Ekle butonu
-          if (widget.targetUserId != null)
+          if (widget.targetUserId != null && !_isUnmatched)
             if (_friendStatus == 'pending_received')
               Row(
                 mainAxisSize: MainAxisSize.min,
@@ -639,13 +865,94 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                   ),
                 ],
               )
+            else if (_friendStatus == 'friends')
+              PopupMenuButton<String>(
+                enabled: !_isFriendLoading,
+                color: const Color(0xFF1E1E1E),
+                offset: const Offset(0, 42),
+                constraints: _friendsMenuWidth == null
+                    ? const BoxConstraints(minWidth: 0)
+                    : BoxConstraints.tightFor(width: _friendsMenuWidth),
+                onOpened: () {
+                  _captureFriendsMenuWidth();
+                  debugPrint(
+                    '[FRIENDS-MENU-WIDTH-DBG] menu_open anchor_width=${_friendsMenuWidth ?? -1}',
+                  );
+                },
+                onSelected: (value) {
+                  if (value == 'remove_friend') {
+                    _showRemoveFriendConfirmDialog();
+                  }
+                },
+                itemBuilder: (context) => [
+                  PopupMenuItem<String>(
+                    value: 'remove_friend',
+                    child: SizedBox(
+                      width: (_friendsMenuWidth ?? 0) > 0
+                          ? _friendsMenuWidth
+                          : null,
+                      child: const Text(
+                        'Arkadaşı sil',
+                        style: TextStyle(
+                          color: Colors.redAccent,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+                child: AnimatedContainer(
+                  key: _friendsMenuAnchorKey,
+                  duration: const Duration(milliseconds: 300),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: _friendButtonColor.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: _friendButtonColor.withValues(alpha: 0.4),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (_isFriendLoading)
+                        SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: _friendButtonColor,
+                          ),
+                        )
+                      else ...[
+                        Icon(_friendButtonIcon,
+                            size: 16, color: _friendButtonColor),
+                        const SizedBox(width: 4),
+                        Text(
+                          _friendButtonLabel,
+                          style: TextStyle(
+                            color: _friendButtonColor,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(width: 2),
+                        Icon(Icons.arrow_drop_down_rounded,
+                            size: 18, color: _friendButtonColor),
+                      ],
+                    ],
+                  ),
+                ),
+              )
             else
               GestureDetector(
-                onTap: (_friendStatus == 'friends' ||
-                        _friendStatus == 'pending_sent' ||
-                        _isFriendLoading)
+                onTap: _isFriendLoading
                     ? null
-                    : _toggleFriend,
+                    : (_friendStatus == 'pending_sent'
+                        ? _cancelSentFriendRequest
+                        : _toggleFriend),
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 300),
                   padding:
@@ -697,14 +1004,15 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                 }
               },
               itemBuilder: (context) => [
-                const PopupMenuItem(
-                  value: 'unmatch',
-                  height: 38,
-                  child: Text(
-                    'Eşleşmeyi iptal et',
-                    style: TextStyle(color: Colors.white, fontSize: 13),
+                if (!_isUnmatched)
+                  const PopupMenuItem(
+                    value: 'unmatch',
+                    height: 38,
+                    child: Text(
+                      'Eşleşmeyi iptal et',
+                      style: TextStyle(color: Colors.white, fontSize: 13),
+                    ),
                   ),
-                ),
                 const PopupMenuItem(
                   value: 'block',
                   height: 38,
@@ -1036,6 +1344,38 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
 
   // ── MESAJ GİRİŞ ALANI ─────────────────────────────────────
   Widget _buildMessageInput() {
+    if (_isUnmatched) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0F0F0F),
+          border: Border(
+            top: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.block_rounded,
+                size: 16, color: Colors.redAccent.withValues(alpha: 0.6)),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                _unmatchedByMe
+                    ? 'Eşleşmeyi iptal ettiniz. Artık mesaj gönderemezsiniz.'
+                    : '${widget.username} eşleşmeyi iptal etti. Artık mesaj gönderemezsiniz.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.35),
+                  fontSize: 13,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
       decoration: BoxDecoration(

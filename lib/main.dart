@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'models/movie.dart';
@@ -11,6 +12,7 @@ import 'screens/movie_detail_screen.dart';
 import 'screens/chat_list_screen.dart';
 import 'screens/profile_screen.dart';
 import 'screens/match_screen.dart';
+import 'screens/notification_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -30,6 +32,35 @@ class MovderApp extends StatelessWidget {
         brightness: Brightness.dark,
         scaffoldBackgroundColor: const Color(0xFF0F0F0F),
         primaryColor: Colors.redAccent,
+        colorScheme: ColorScheme.fromSwatch(
+          brightness: Brightness.dark,
+          primarySwatch: Colors.red,
+          backgroundColor: const Color(0xFF0F0F0F),
+        ).copyWith(
+          secondary: Colors.redAccent,
+        ),
+        textTheme: const TextTheme(
+          headlineLarge: TextStyle(
+            fontSize: 28,
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+          ),
+          titleMedium: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w600,
+            color: Colors.white,
+          ),
+          bodyMedium: TextStyle(
+            fontSize: 14,
+            color: Colors.white70,
+            height: 1.4,
+          ),
+          bodySmall: TextStyle(
+            fontSize: 12,
+            color: Colors.white54,
+            height: 1.3,
+          ),
+        ),
         splashFactory: NoSplash.splashFactory,
         splashColor: Colors.transparent,
         highlightColor: Colors.transparent,
@@ -49,7 +80,8 @@ class MainNavigatorScreen extends StatefulWidget {
   State<MainNavigatorScreen> createState() => _MainNavigatorScreenState();
 }
 
-class _MainNavigatorScreenState extends State<MainNavigatorScreen> {
+class _MainNavigatorScreenState extends State<MainNavigatorScreen>
+    with WidgetsBindingObserver {
   int _currentIndex = 0;
 
   final GlobalKey<MatchScreenState> _matchKey = GlobalKey<MatchScreenState>();
@@ -60,12 +92,14 @@ class _MainNavigatorScreenState extends State<MainNavigatorScreen> {
         const MovieRadarScreen(),
         MatchScreen(key: _matchKey),
         ChatListScreen(refreshSignal: _chatRefreshSignal),
+        const NotificationScreen(),
         ProfileScreen(key: _profileKey),
       ];
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     // Overlay bir sonraki frame'de hazır olur
     WidgetsBinding.instance.addPostFrameCallback((_) => _initServices());
   }
@@ -80,6 +114,18 @@ class _MainNavigatorScreenState extends State<MainNavigatorScreen> {
     GlobalChatService.instance.setChatListVisible(_currentIndex == 2);
   }
 
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+ 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final isForeground = state == AppLifecycleState.resumed;
+    GlobalChatService.instance.handleAppLifecycle(isForeground);
+  }
+ 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -106,7 +152,7 @@ class _MainNavigatorScreenState extends State<MainNavigatorScreen> {
               _chatRefreshSignal++;
             }
             _currentIndex = index;
-            if (index == 3) {
+            if (index == 4) {
               _profileKey = UniqueKey();
             }
           });
@@ -126,6 +172,10 @@ class _MainNavigatorScreenState extends State<MainNavigatorScreen> {
           BottomNavigationBarItem(
             icon: Icon(Icons.chat_bubble_outline),
             label: "Mesajlar",
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.notifications_outlined),
+            label: "Bildirimler",
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.person),
@@ -1194,12 +1244,21 @@ class _MovieRadarScreenState extends State<MovieRadarScreen> {
                 borderRadius:
                     const BorderRadius.horizontal(left: Radius.circular(14)),
                 child: movie.posterUrl.isNotEmpty
-                    ? Image.network(
-                        movie.posterUrl,
+                    ? CachedNetworkImage(
+                        imageUrl: movie.posterUrl,
                         width: 90,
                         height: 130,
                         fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => Container(
+                        placeholder: (_, __) => Container(
+                          width: 90,
+                          height: 130,
+                          color: const Color(0xFF2A2A2A),
+                          child: const Icon(
+                            Icons.movie,
+                            color: Colors.white38,
+                          ),
+                        ),
+                        errorWidget: (_, __, ___) => Container(
                           width: 90,
                           height: 130,
                           color: const Color(0xFF2A2A2A),
@@ -1354,29 +1413,34 @@ class _MovieRadarScreenState extends State<MovieRadarScreen> {
               children: [
                 // Afiş görseli
                 movie.posterUrl.isNotEmpty
-                    ? Image.network(
-                        movie.posterUrl,
+                    ? CachedNetworkImage(
+                        imageUrl: movie.posterUrl,
                         fit: BoxFit.cover,
-                        loadingBuilder: (context, child, loadingProgress) {
-                          if (loadingProgress == null) return child;
-                          return Container(
-                            color: const Color(0xFF1E1E1E),
-                            child: const Center(
-                              child: CircularProgressIndicator(
-                                  color: Colors.redAccent, strokeWidth: 2),
-                            ),
-                          );
-                        },
-                        errorBuilder: (_, __, ___) => Container(
+                        placeholder: (_, __) => Container(
                           color: const Color(0xFF1E1E1E),
-                          child: const Icon(Icons.broken_image,
-                              color: Colors.grey, size: 40),
+                          child: const Center(
+                            child: CircularProgressIndicator(
+                              color: Colors.redAccent,
+                              strokeWidth: 2,
+                            ),
+                          ),
+                        ),
+                        errorWidget: (_, __, ___) => Container(
+                          color: const Color(0xFF1E1E1E),
+                          child: const Icon(
+                            Icons.broken_image,
+                            color: Colors.grey,
+                            size: 40,
+                          ),
                         ),
                       )
                     : Container(
                         color: const Color(0xFF1E1E1E),
-                        child: const Icon(Icons.movie,
-                            color: Colors.grey, size: 40),
+                        child: const Icon(
+                          Icons.movie,
+                          color: Colors.grey,
+                          size: 40,
+                        ),
                       ),
                 // Alt karartma gradyanı
                 Container(

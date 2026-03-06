@@ -178,13 +178,47 @@ func GetMyLists() gin.HandlerFunc {
 // GetUserLists — Belirli bir kullanıcının herkese açık listelerini (kategorilerini) getirir
 func GetUserLists() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		viewerIDHex := c.GetString("userId")
 		targetUserId := c.Param("userId")
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
 		collection := config.GetCollection(config.DB, "lists")
-		cursor, err := collection.Find(ctx, bson.M{"userId": targetUserId, "isPublic": true})
+		userCollection := config.GetCollection(config.DB, "users")
+
+		viewerID, err := primitive.ObjectIDFromHex(viewerIDHex)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz kullanıcı kimliği"})
+			return
+		}
+		targetID, err := primitive.ObjectIDFromHex(targetUserId)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz hedef kullanıcı kimliği"})
+			return
+		}
+
+		var target models.User
+		if err := userCollection.FindOne(ctx, bson.M{"_id": targetID}).Decode(&target); err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Kullanıcı bulunamadı"})
+			return
+		}
+
+		isOwner := viewerIDHex == targetUserId
+		isFriend := containsObjectID(target.Friends, viewerID)
+		privacy := userPrivacySettings(target)
+		canSeeDetails := canViewerSeeProfileDetails(viewerID, targetID, isFriend, privacy)
+		if !isOwner && !canSeeDetails {
+			c.JSON(http.StatusOK, []models.List{})
+			return
+		}
+
+		filter := bson.M{"userId": targetUserId}
+		if !isOwner && privacy.ProfileVisibility == "public" {
+			filter["isPublic"] = true
+		}
+
+		cursor, err := collection.Find(ctx, filter)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Kullanıcının listeleri getirilemedi"})
 			return
@@ -259,6 +293,7 @@ func AddMovieToList() gin.HandlerFunc {
 // GetListItems â€” Bir listenin iÃ§indeki tÃ¼m filmleri getirir
 func GetListItems() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		viewerIDHex := c.GetString("userId")
 		listIdStr := c.Param("listId")
 		listObjId, err := primitive.ObjectIDFromHex(listIdStr)
 		if err != nil {
@@ -268,6 +303,41 @@ func GetListItems() gin.HandlerFunc {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
+
+		listColl := config.GetCollection(config.DB, "lists")
+		var list models.List
+		if err := listColl.FindOne(ctx, bson.M{"_id": listObjId}).Decode(&list); err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Liste bulunamadı"})
+			return
+		}
+
+		if list.UserID != viewerIDHex {
+			userCollection := config.GetCollection(config.DB, "users")
+			viewerID, err := primitive.ObjectIDFromHex(viewerIDHex)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz kullanıcı kimliği"})
+				return
+			}
+			targetID, err := primitive.ObjectIDFromHex(list.UserID)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz liste sahibi kimliği"})
+				return
+			}
+
+			var target models.User
+			if err := userCollection.FindOne(ctx, bson.M{"_id": targetID}).Decode(&target); err != nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": "Liste sahibi bulunamadı"})
+				return
+			}
+
+			isFriend := containsObjectID(target.Friends, viewerID)
+			privacy := userPrivacySettings(target)
+			canSeeDetails := canViewerSeeProfileDetails(viewerID, targetID, isFriend, privacy)
+			if !canSeeDetails || (privacy.ProfileVisibility == "public" && !list.IsPublic) {
+				c.JSON(http.StatusForbidden, gin.H{"error": "Bu listeyi görme yetkiniz yok"})
+				return
+			}
+		}
 
 		itemColl := config.GetCollection(config.DB, "list_items")
 		findOpts := options.Find().SetSort(bson.D{{Key: "position", Value: 1}, {Key: "addedAt", Value: 1}})

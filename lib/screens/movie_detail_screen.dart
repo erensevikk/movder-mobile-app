@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../models/movie.dart';
 import '../services/api_service.dart';
 import '../services/watching_service.dart';
@@ -187,12 +188,14 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           fit: StackFit.expand,
           children: [
             // Arka plan resmi (Backdrop veya Poster)
-            Image.network(
-              currentMovie.backdropUrl.isNotEmpty
+            CachedNetworkImage(
+              imageUrl: currentMovie.backdropUrl.isNotEmpty
                   ? currentMovie.backdropUrl
                   : currentMovie.posterUrl,
               fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) =>
+              placeholder: (_, __) =>
+                  Container(color: const Color(0xFF1E1E1E)),
+              errorWidget: (_, __, ___) =>
                   Container(color: const Color(0xFF1E1E1E)),
             ),
             // Karartma efekti (gradient)

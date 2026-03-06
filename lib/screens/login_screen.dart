@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:http/http.dart' as http;
 import '../services/auth_service.dart';
 import '../main.dart';
@@ -177,10 +178,12 @@ class _LoginScreenState extends State<LoginScreen>
         fit: StackFit.expand,
         children: [
           // Arka plan blur efekti
-          Image.network(
-            'https://image.tmdb.org/t/p/w780/2ssWTSVklAEc98frZUQhgtGHx7s.jpg',
+          CachedNetworkImage(
+            imageUrl:
+                'https://image.tmdb.org/t/p/w780/2ssWTSVklAEc98frZUQhgtGHx7s.jpg',
             fit: BoxFit.cover,
-            errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+            placeholder: (_, __) => Container(color: Colors.black),
+            errorWidget: (_, __, ___) => const SizedBox.shrink(),
           ),
           BackdropFilter(
             filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),

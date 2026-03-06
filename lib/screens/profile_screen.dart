@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -32,49 +33,76 @@ class ProfileScreenState extends State<ProfileScreen> {
   String _watchingMovieName = '';
   String _watchingFor = '';
 
+  bool _isWatchStatusLoading = false;
+  int _loadProfileRequestSeq = 0;
+
   @override
   void initState() {
     super.initState();
     _loadProfile();
   }
 
+  /// Public metod: MainNavigator'dan çağrılabilir
+  /// UniqueKey yerine targeted refresh için kullanılır
+  void refreshProfile() {
+    _loadProfile();
+  }
+
   Future<void> _loadProfile() async {
+    final requestId = ++_loadProfileRequestSeq;
+
     setState(() {
       _isLoading = true;
     });
 
     final loggedIn = AuthService.isLoggedIn;
     if (!loggedIn) {
-      if (mounted) {
+      if (mounted && requestId == _loadProfileRequestSeq) {
         setState(() {
           _isLoggedIn = false;
           _isLoading = false;
+          _isWatchStatusLoading = false;
         });
       }
       return;
     }
 
     final profile = await ApiService.getProfile();
-    if (!mounted) return;
+    if (!mounted || requestId != _loadProfileRequestSeq) return;
 
     if (profile == null) {
       setState(() {
         _isLoggedIn = false;
         _isLoading = false;
+        _isWatchStatusLoading = false;
       });
       return;
     }
-
-    // İzleme durumunu çek
-    final statusData = await ApiService.getMyWatchStatus();
-    if (!mounted) return;
 
     setState(() {
       _isLoggedIn = true;
       _username = (profile['username'] ?? '').toString();
       _avatarUrl = (profile['avatarUrl'] ?? '').toString();
       _coverUrl = (profile['coverUrl'] ?? '').toString();
+      _favoritePosterUrl = '';
+      _isWatching = false;
+      _watchingMovieName = '';
+      _watchingFor = '';
+      _isLoading = false;
+      _isWatchStatusLoading = true;
+    });
 
+    _loadWatchingStatusInBackground(requestId);
+    if (_coverUrl.isEmpty) {
+      _loadCoverFallbackInBackground(requestId);
+    }
+  }
+
+  Future<void> _loadWatchingStatusInBackground(int requestId) async {
+    final statusData = await ApiService.getMyWatchStatus();
+    if (!mounted || requestId != _loadProfileRequestSeq) return;
+
+    setState(() {
       if (statusData != null && statusData['watching'] == true) {
         _isWatching = true;
         final status = statusData['status'];
@@ -85,39 +113,37 @@ class ProfileScreenState extends State<ProfileScreen> {
         _watchingMovieName = '';
         _watchingFor = '';
       }
-
-      _isLoading = false;
+      _isWatchStatusLoading = false;
     });
+  }
 
-    // Kapak yoksa favori listeden poster çek
-    if (_coverUrl.isEmpty) {
-      final lists = await ApiService.getMyLists();
-      if (!mounted) return;
-      for (final list in lists) {
-        final name = (list['name'] ?? '').toString().toLowerCase();
-        if (name.contains('favori')) {
-          final id = list['id'] ?? list['_id'];
-          if (id != null) {
-            final items = await ApiService.getListItems(id.toString());
-            if (items.isNotEmpty) {
-              for (final item in items) {
-                final poster = item['posterUrl']?.toString() ?? '';
-                if (poster.isNotEmpty) {
-                  if (mounted) {
-                    setState(() {
-                      _favoritePosterUrl = poster.startsWith('http')
-                          ? poster
-                          : 'https://image.tmdb.org/t/p/w780$poster';
-                    });
-                  }
-                  break; // İlk posteri bulur bulmaz döngüyü kır
-                }
-              }
-            }
-          }
-          break; // Sadece favori listesini taramak yeterli
-        }
+  Future<void> _loadCoverFallbackInBackground(int requestId) async {
+    final lists = await ApiService.getMyLists();
+    if (!mounted || requestId != _loadProfileRequestSeq) return;
+
+    for (final list in lists) {
+      final name = (list['name'] ?? '').toString().toLowerCase();
+      if (!name.contains('favori')) continue;
+
+      final id = list['id'] ?? list['_id'];
+      if (id == null) break;
+
+      final items = await ApiService.getListItems(id.toString());
+      if (!mounted || requestId != _loadProfileRequestSeq) return;
+
+      for (final item in items) {
+        final poster = item['posterUrl']?.toString() ?? '';
+        if (poster.isEmpty) continue;
+
+        setState(() {
+          _favoritePosterUrl = poster.startsWith('http')
+              ? poster
+              : 'https://image.tmdb.org/t/p/w780$poster';
+        });
+        return;
       }
+
+      break; // Sadece favori listesini taramak yeterli
     }
   }
 
@@ -218,8 +244,7 @@ class ProfileScreenState extends State<ProfileScreen> {
           imageUrl:
               'https://image.tmdb.org/t/p/w780/xbiycuc84TrieEWwkkuH2hoEa9S.jpg',
           fit: BoxFit.cover,
-          placeholder: (_, __) =>
-              Container(color: const Color(0xFF0F0F0F)),
+          placeholder: (_, __) => Container(color: const Color(0xFF0F0F0F)),
           errorWidget: (_, __, ___) =>
               Container(color: const Color(0xFF0F0F0F)),
         ),
@@ -854,6 +879,26 @@ class ProfileScreenState extends State<ProfileScreen> {
   }
 
   Widget _buildWatchingStatus() {
+    if (_isWatchStatusLoading) {
+      return Container(
+        margin: const EdgeInsets.only(top: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1E1E1E),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.white12),
+        ),
+        child: const SizedBox(
+          width: 14,
+          height: 14,
+          child: CircularProgressIndicator(
+            strokeWidth: 2,
+            color: Colors.white38,
+          ),
+        ),
+      );
+    }
+
     if (!_isWatching || _watchingMovieName.isEmpty) {
       return Container(
         margin: const EdgeInsets.only(top: 4),
@@ -927,5 +972,3 @@ class ProfileScreenState extends State<ProfileScreen> {
     );
   }
 }
-
-

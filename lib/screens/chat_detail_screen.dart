@@ -44,6 +44,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   final FocusNode _focusNode = FocusNode();
 
   late List<Map<String, dynamic>> _messages;
+  final Map<String, Timer> _pendingMessageTimers = {};
 
   // Akıllı mesaj servisi
   final ChatService _chatService = ChatService();
@@ -180,37 +181,50 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         if (_myUserId != null && msg['senderId'] == _myUserId) {
           final incomingContent = (msg['content'] ?? '').toString();
           final incomingStatus = (msg['status'] ?? 'delivered').toString();
+          final incomingClientMessageId =
+              (msg['clientMessageId'] ?? '').toString();
           bool merged = false;
 
           setState(() {
-            for (int i = _messages.length - 1; i >= 0; i--) {
-              final m = _messages[i];
-              final isMe = m['isMe'] == true;
-              final text = (m['text'] ?? '').toString();
-              final status = (m['status'] ?? 'sent').toString();
-              final isPending = status == 'sent' || status == 'delivered';
-
-              if (isMe && text == incomingContent && isPending) {
-                m['status'] = incomingStatus;
-                if (msg['timestamp'] != null) {
-                  m['time'] = _formatTimestamp(msg['timestamp']);
+            // 1) En güvenli eşleşme: clientMessageId
+            if (incomingClientMessageId.isNotEmpty) {
+              for (int i = _messages.length - 1; i >= 0; i--) {
+                final m = _messages[i];
+                if (m['isMe'] == true &&
+                    (m['clientMessageId']?.toString() ?? '') ==
+                        incomingClientMessageId) {
+                  m['status'] = incomingStatus;
+                  if (msg['timestamp'] != null) {
+                    m['time'] = _formatTimestamp(msg['timestamp']);
+                  }
+                  merged = true;
+                  _pendingMessageTimers[incomingClientMessageId]?.cancel();
+                  _pendingMessageTimers.remove(incomingClientMessageId);
+                  break;
                 }
-                merged = true;
-                break;
               }
             }
 
-            // İçerik bazlı eşleşme olmazsa en son pending kendi mesajını güncelle (fallback)
+            // 2) Fallback: aynı içerikli en son pending mesaj
             if (!merged) {
               for (int i = _messages.length - 1; i >= 0; i--) {
                 final m = _messages[i];
                 final isMe = m['isMe'] == true;
+                final text = (m['text'] ?? '').toString();
                 final status = (m['status'] ?? 'sent').toString();
-                final isPending = status == 'sent' || status == 'delivered';
-                if (isMe && isPending) {
+                final isPending = status == 'pending_local' ||
+                    status == 'sent' ||
+                    status == 'delivered';
+
+                if (isMe && text == incomingContent && isPending) {
                   m['status'] = incomingStatus;
                   if (msg['timestamp'] != null) {
                     m['time'] = _formatTimestamp(msg['timestamp']);
+                  }
+                  final cmid = (m['clientMessageId'] ?? '').toString();
+                  if (cmid.isNotEmpty) {
+                    _pendingMessageTimers[cmid]?.cancel();
+                    _pendingMessageTimers.remove(cmid);
                   }
                   merged = true;
                   break;
@@ -220,7 +234,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
           });
 
           debugPrint(
-            '[CHAT-DBG] own_message_echo_merged senderId=${msg['senderId']} status=$incomingStatus merged=$merged',
+            '[CHAT-DBG] own_message_echo_merged senderId=${msg['senderId']} status=$incomingStatus merged=$merged clientMessageId=$incomingClientMessageId',
           );
           return;
         }
@@ -361,8 +375,10 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   void _startFriendStatusPolling() {
     if (widget.targetUserId == null) return;
     _friendStatusPollTimer?.cancel();
+    // OPTIMIZED: 2 saniye yerine 10 saniyede bir kontrol et
+    // WebSocket zaten açık, bu sadece fallback olarak kullanılıyor
     _friendStatusPollTimer = Timer.periodic(
-      const Duration(seconds: 2),
+      const Duration(seconds: 10),
       (_) => _loadFriendStatus(trigger: 'polling'),
     );
   }
@@ -370,6 +386,10 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   @override
   void dispose() {
     _friendStatusPollTimer?.cancel();
+    for (final t in _pendingMessageTimers.values) {
+      t.cancel();
+    }
+    _pendingMessageTimers.clear();
     // Chat ekranından çıkınca global dinleyicide aktif oda bayrağını sıfırla
     GlobalChatService.instance.clearActiveRoom();
     // Ekrandan çıkınca websocket'i kapat; aksi halde odada var görünmeye devam eder
@@ -384,9 +404,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     if (_isUnmatched) return;
     if (text.trim().isEmpty) return;
 
-    // Sadece chat servisine yolla, mesaj servisten geldiğinde (echoed) veya lokalden eklenmesi gerektiğinde stream'den listeye eklenecek
-    _chatService.sendMessage(text.trim());
-    _messageController.clear();
+    final nowMillis = DateTime.now().millisecondsSinceEpoch;
+    final clientMessageId = 'local-$nowMillis-${text.trim().hashCode}';
 
     // Lokal olarak listeye ekle ki anında ekranımızda da gözüksün
     setState(() {
@@ -394,14 +413,94 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         'text': text.trim(),
         'isMe': true,
         'time': _currentTime(),
-        'status': 'sent',
+        'status': 'pending_local',
+        'clientMessageId': clientMessageId,
+        'localCreatedAtMs': nowMillis,
       });
     });
+
+    final sent =
+        _chatService.sendMessage(text.trim(), clientMessageId: clientMessageId);
+    _messageController.clear();
+
+    if (sent) {
+      _startPendingTimeout(clientMessageId);
+    } else {
+      _markMessageAsFailed(clientMessageId);
+    }
+
     debugPrint(
-      '[CHAT-DBG] local_message_appended status=sent roomId=${widget.roomId} myUserId=$_myUserId',
+      '[CHAT-DBG] local_message_appended status=pending_local roomId=${widget.roomId} myUserId=$_myUserId clientMessageId=$clientMessageId sent=$sent',
     );
 
     _scrollToBottom();
+  }
+
+  void _startPendingTimeout(String clientMessageId) {
+    _pendingMessageTimers[clientMessageId]?.cancel();
+    _pendingMessageTimers[clientMessageId] = Timer(
+      const Duration(seconds: 8),
+      () {
+        if (!mounted) return;
+        _markMessageAsFailed(clientMessageId);
+      },
+    );
+  }
+
+  void _markMessageAsFailed(String clientMessageId) {
+    if (clientMessageId.isEmpty) return;
+    if (!mounted) return;
+
+    setState(() {
+      for (int i = _messages.length - 1; i >= 0; i--) {
+        final m = _messages[i];
+        if ((m['clientMessageId']?.toString() ?? '') == clientMessageId) {
+          final status = (m['status'] ?? '').toString();
+          // Sunucudan onay alınmış mesajları başarısız olarak işaretleme
+          // 'sent' = sunucuya ulaştı, 'delivered' = alıcıya ulaştı, 'read' = okundu
+          if (status == 'read' || status == 'delivered' || status == 'sent') {
+            return;
+          }
+          m['status'] = 'failed';
+          break;
+        }
+      }
+    });
+
+    _pendingMessageTimers[clientMessageId]?.cancel();
+    _pendingMessageTimers.remove(clientMessageId);
+  }
+
+  void _retryFailedMessage(int index) {
+    if (index < 0 || index >= _messages.length) return;
+    final message = _messages[index];
+    final text = (message['text'] ?? '').toString().trim();
+    if (text.isEmpty) return;
+
+    final oldClientMessageId = (message['clientMessageId'] ?? '').toString();
+    if (oldClientMessageId.isNotEmpty) {
+      _pendingMessageTimers[oldClientMessageId]?.cancel();
+      _pendingMessageTimers.remove(oldClientMessageId);
+    }
+
+    final nowMillis = DateTime.now().millisecondsSinceEpoch;
+    final newClientMessageId = 'retry-$nowMillis-${text.hashCode}';
+
+    setState(() {
+      message['status'] = 'pending_local';
+      message['time'] = _currentTime();
+      message['clientMessageId'] = newClientMessageId;
+      message['localCreatedAtMs'] = nowMillis;
+    });
+
+    final sent =
+        _chatService.sendMessage(text, clientMessageId: newClientMessageId);
+
+    if (sent) {
+      _startPendingTimeout(newClientMessageId);
+    } else {
+      _markMessageAsFailed(newClientMessageId);
+    }
   }
 
   // Duruma göre buton görünümü
@@ -1167,17 +1266,22 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         final bool isMe = msg['isMe'] as bool;
         final String text = msg['text'] as String;
         final String time = msg['time'] as String;
-        final String status =
-            (msg['status'] ?? 'sent') as String; // sent, delivered, read
+        final String status = (msg['status'] ?? 'pending_local')
+            as String; // pending_local, sent, delivered, read, failed
 
-        IconData statusIcon = Icons.check;
+        IconData statusIcon = Icons.access_time_rounded;
         Color statusColor = Colors.white30;
 
-        if (status == 'delivered') {
+        if (status == 'sent') {
+          statusIcon = Icons.check;
+        } else if (status == 'delivered') {
           statusIcon = Icons.done_all;
         } else if (status == 'read') {
           statusIcon = Icons.done_all;
           statusColor = Colors.blueAccent;
+        } else if (status == 'failed') {
+          statusIcon = Icons.error_outline_rounded;
+          statusColor = Colors.redAccent;
         }
 
         return Align(
@@ -1235,6 +1339,21 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                     ],
                   ],
                 ),
+                if (isMe && status == 'failed')
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: GestureDetector(
+                      onTap: () => _retryFailedMessage(index),
+                      child: const Text(
+                        'Tekrar gönder',
+                        style: TextStyle(
+                          color: Colors.orangeAccent,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),

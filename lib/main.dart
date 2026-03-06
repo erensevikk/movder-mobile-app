@@ -85,7 +85,9 @@ class _MainNavigatorScreenState extends State<MainNavigatorScreen>
   int _currentIndex = 0;
 
   final GlobalKey<MatchScreenState> _matchKey = GlobalKey<MatchScreenState>();
-  Key _profileKey = UniqueKey();
+  // OPTIMIZED: UniqueKey yerine callback ile targeted refresh
+  final GlobalKey<ProfileScreenState> _profileKey =
+      GlobalKey<ProfileScreenState>();
   int _chatRefreshSignal = 0;
 
   List<Widget> get _pages => [
@@ -119,13 +121,13 @@ class _MainNavigatorScreenState extends State<MainNavigatorScreen>
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
- 
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     final isForeground = state == AppLifecycleState.resumed;
     GlobalChatService.instance.handleAppLifecycle(isForeground);
   }
- 
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -152,8 +154,9 @@ class _MainNavigatorScreenState extends State<MainNavigatorScreen>
               _chatRefreshSignal++;
             }
             _currentIndex = index;
+            // OPTIMIZED: UniqueKey yerine ProfileScreen'in refresh metodunu çağır
             if (index == 4) {
-              _profileKey = UniqueKey();
+              _profileKey.currentState?.refreshProfile();
             }
           });
 

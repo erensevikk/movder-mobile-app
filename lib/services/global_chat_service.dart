@@ -45,16 +45,29 @@ class GlobalChatService {
 
   /// Tüm sohbet odalarını getirip WebSocket bağlantılarını başlatır.
   /// [rooms] → her eleman: {roomId, username, avatarUrl, ...}
+  /// OPTIMIZED: Delta-based room management - sadece yeni odaları ekle, mevcutları koru
   Future<void> init(List<Map<String, dynamic>> rooms) async {
     if (!AuthService.isLoggedIn) return;
 
-    // Önceki bağlantıları temizle
-    await dispose();
     _initialized = true;
 
+    // Mevcut roomId'leri takip et
+    final currentRoomIds =
+        rooms.map((r) => r['roomId']?.toString() ?? '').toSet();
+
+    // Kapanan odaları kapat (artık listede yok)
+    final toRemove = _channels.keys.toSet().difference(currentRoomIds);
+    for (final roomId in toRemove) {
+      _disconnectRoom(roomId);
+    }
+
+    // Yeni odaları ekle
     for (final room in rooms) {
       final roomId = room['roomId']?.toString() ?? '';
       if (roomId.isEmpty) continue;
+
+      // Zaten bağlıysa atla
+      if (_channels.containsKey(roomId)) continue;
 
       _roomMeta[roomId] = _RoomMeta(
         username: (room['username'] ?? 'Kullanıcı').toString(),
@@ -63,6 +76,15 @@ class GlobalChatService {
 
       _connectRoom(roomId);
     }
+  }
+
+  /// Tek bir odayı disconnect et
+  void _disconnectRoom(String roomId) {
+    _subscriptions[roomId]?.cancel();
+    _subscriptions.remove(roomId);
+    _channels[roomId]?.sink.close();
+    _channels.remove(roomId);
+    _roomMeta.remove(roomId);
   }
 
   void _connectRoom(String roomId) {
@@ -192,13 +214,13 @@ class GlobalChatService {
   void setChatListVisible(bool value) {
     _isChatListVisible = value;
   }
- 
+
   /// Uygulama yaşam döngüsünü ana ekrandan bildirir.
   /// Arka plana geçince tüm WS bağlantıları kapatılır, ön plana gelince tekrar bağlanılır.
   void handleAppLifecycle(bool isForeground) {
     if (_isAppInForeground == isForeground) return;
     _isAppInForeground = isForeground;
- 
+
     if (isForeground) {
       if (!AuthService.isLoggedIn) return;
       _initialized = true;
@@ -220,7 +242,7 @@ class GlobalChatService {
       _channels.clear();
     }
   }
- 
+
   Stream<String> get messageEvents => _messageEventsController.stream;
 
   Future<void> dispose() async {

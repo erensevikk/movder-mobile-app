@@ -16,9 +16,18 @@ class ChatListScreen extends StatefulWidget {
   State<ChatListScreen> createState() => _ChatListScreenState();
 }
 
+enum _ChatListViewState {
+  initialLoading,
+  content,
+  empty,
+  error,
+}
+
 class _ChatListScreenState extends State<ChatListScreen> {
   List<Map<String, dynamic>> _chats = [];
-  bool _isLoading = true;
+  _ChatListViewState _viewState = _ChatListViewState.initialLoading;
+  bool _isRefreshing = false;
+  String? _lastErrorMessage;
   StreamSubscription<String>? _messageEventsSub;
   Timer? _refreshDebounce;
 
@@ -29,39 +38,107 @@ class _ChatListScreenState extends State<ChatListScreen> {
   @override
   void initState() {
     super.initState();
+    GlobalChatService.instance.setChatListVisible(true);
     _loadChats();
 
-    _messageEventsSub = GlobalChatService.instance.messageEvents.listen((_) {
-      // Çok hızlı ardışık eventlerde API'yi spam etmemek için debounce
-      _refreshDebounce?.cancel();
-      _refreshDebounce = Timer(const Duration(milliseconds: 250), () {
-        _refreshChatsOnly();
-      });
+    _messageEventsSub =
+        GlobalChatService.instance.messageEvents.listen((roomId) {
+      // İncremental update: Sadece ilgili odayı güncelle, API çağrısı yapma
+      _updateChatRoomLocally(roomId);
     });
   }
 
-  Future<void> _loadChats({bool rebindGlobalWs = true}) async {
-    setState(() => _isLoading = true);
-    final rooms = await ApiService.getChatRooms();
-    if (!mounted) return;
-    setState(() {
-      _chats = rooms;
-      _isLoading = false;
-    });
-
-    // Global WS bağlantılarını sadece gerektiğinde re-init et.
-    // (Her yeni mesaj eventinde re-init etmek socket churn üretir.)
-    if (rebindGlobalWs) {
-      await GlobalChatService.instance.init(rooms);
+  Future<void> _loadChats(
+      {bool rebindGlobalWs = true, bool isRefresh = false}) async {
+    if (isRefresh) {
+      setState(() => _isRefreshing = true);
+    } else {
+      setState(() => _viewState = _ChatListViewState.initialLoading);
     }
+
+    final result = await ApiService.getChatRoomsWithMeta();
+    if (!mounted) return;
+
+    final bool ok = result['ok'] == true;
+    final String? errorMessage = result['message']?.toString();
+    final List<Map<String, dynamic>> rooms =
+        (result['rooms'] as List<Map<String, dynamic>>?) ?? const [];
+
+    if (ok) {
+      setState(() {
+        _chats = rooms;
+        _lastErrorMessage = null;
+        _viewState = rooms.isEmpty
+            ? _ChatListViewState.empty
+            : _ChatListViewState.content;
+        _isRefreshing = false;
+      });
+
+      // Global WS bağlantılarını sadece gerektiğinde re-init et.
+      // (Her yeni mesaj eventinde re-init etmek socket churn üretir.)
+      if (rebindGlobalWs) {
+        await GlobalChatService.instance.init(rooms);
+      }
+      return;
+    }
+
+    setState(() {
+      _lastErrorMessage = errorMessage?.isNotEmpty == true
+          ? errorMessage
+          : 'Sohbetler yüklenemedi.';
+      _viewState = _chats.isEmpty
+          ? _ChatListViewState.error
+          : _ChatListViewState.content;
+      _isRefreshing = false;
+    });
   }
 
+  /// İncremental update: Sadece ilgili odayı güncelle, full API çağrısı yok
+  /// Bu fonksiyon yeni mesaj event'lerinde çağrılır
+  void _updateChatRoomLocally(String roomId) {
+    // Odayı bul ve en üste taşı (yeni mesaj var olarak işaretle)
+    final existingIndex = _chats.indexWhere((chat) => chat['roomId'] == roomId);
+    if (existingIndex > 0) {
+      // Odayı en üste taşı
+      setState(() {
+        final chat = Map<String, dynamic>.from(_chats.removeAt(existingIndex));
+        chat['lastTimestamp'] = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+        _chats.insert(0, chat);
+      });
+    } else if (existingIndex == 0) {
+      // Zaten en üstte, sadece zamanı güncelle
+      setState(() {
+        _chats[0]['lastTimestamp'] =
+            DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      });
+    }
+    // Oda listede yoksa yapacak bir şey yok - tam yenileme gerekmez
+  }
+
+  /// Full API refresh - sadece kullanıcı manuel yenilediğinde veya ilk yüklemede kullan
   Future<void> _refreshChatsOnly() async {
-    final rooms = await ApiService.getChatRooms();
+    final result = await ApiService.getChatRoomsWithMeta();
     if (!mounted) return;
+
+    if (result['ok'] == true) {
+      final rooms =
+          (result['rooms'] as List<Map<String, dynamic>>?) ?? const [];
+      setState(() {
+        _chats = rooms;
+        _lastErrorMessage = null;
+        _viewState = rooms.isEmpty
+            ? _ChatListViewState.empty
+            : _ChatListViewState.content;
+      });
+      return;
+    }
+
     setState(() {
-      _chats = rooms;
-      _isLoading = false;
+      _lastErrorMessage =
+          (result['message'] ?? 'Sohbetler yenilenemedi.').toString();
+      if (_chats.isEmpty) {
+        _viewState = _ChatListViewState.error;
+      }
     });
   }
 
@@ -107,6 +184,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
 
   @override
   void dispose() {
+    GlobalChatService.instance.setChatListVisible(false);
     _refreshDebounce?.cancel();
     _messageEventsSub?.cancel();
     _searchController.dispose();
@@ -177,9 +255,8 @@ class _ChatListScreenState extends State<ChatListScreen> {
                             children: [
                               Text(
                                 'Sohbetler',
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .headlineLarge,
+                                style:
+                                    Theme.of(context).textTheme.headlineLarge,
                               ),
                               const SizedBox(height: 4),
                               Text(
@@ -235,7 +312,46 @@ class _ChatListScreenState extends State<ChatListScreen> {
             ),
 
             // ── Aktif Eşleşme Özet Bandı ─────────────────────
-            if (!_isLoading && _chats.isNotEmpty)
+            if (_lastErrorMessage != null && _chats.isNotEmpty)
+              Container(
+                margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.orangeAccent.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: Colors.orangeAccent.withValues(alpha: 0.28),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.wifi_off_rounded,
+                        color: Colors.orangeAccent, size: 16),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        _lastErrorMessage!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white70,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () =>
+                          _loadChats(rebindGlobalWs: false, isRefresh: true),
+                      child: const Text('Yenile',
+                          style: TextStyle(color: Colors.orangeAccent)),
+                    ),
+                  ],
+                ),
+              ),
+
+            if (_chats.isNotEmpty)
               Container(
                 margin: const EdgeInsets.symmetric(horizontal: 20),
                 padding:
@@ -296,105 +412,190 @@ class _ChatListScreenState extends State<ChatListScreen> {
 
             // ── Sohbet Listesi ────────────────────────────────
             Expanded(
-              child: _isLoading
-                  ? const Center(
-                      child: CircularProgressIndicator(color: Colors.redAccent))
-                  : displayedChats.isEmpty
-                      ? Center(
-                          child: Text(
-                            _isSearching
-                                ? 'Aradığınız kişiyle sohbet bulunamadı.'
-                                : 'Henüz hiç eşleşmen veya sohbetin yok.',
-                            style: const TextStyle(color: Colors.white54),
-                          ),
-                        )
-                      : ListView.separated(
-                          padding: const EdgeInsets.symmetric(horizontal: 20),
-                          itemCount: displayedChats.length,
-                          separatorBuilder: (_, __) => Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 4),
-                            child: Divider(
-                              color: Colors.white.withValues(alpha: 0.06),
-                              height: 1,
-                            ),
-                          ),
-                          itemBuilder: (context, index) {
-                            final chat = displayedChats[index];
-                            final avatarRaw =
-                                (chat['avatarUrl'] ?? '').toString().trim();
-                            final avatarUrl = avatarRaw.isEmpty
-                                ? ''
-                                : (avatarRaw.startsWith('http://') ||
-                                        avatarRaw.startsWith('https://')
-                                    ? avatarRaw
-                                    : (avatarRaw.startsWith('/')
-                                        ? '${ApiService.baseUrl}$avatarRaw'
-                                        : '${ApiService.baseUrl}/$avatarRaw'));
-
-                            final roomId = (chat['roomId'] ?? '').toString();
-
-                            return _SwipeToDeleteChatItem(
-                              key: ValueKey('chat-swipe-$roomId-$index'),
-                              onDelete: () => _deleteChatForMe(roomId),
-                              child: _ChatCard(
-                                username: chat['username']?.toString() ??
-                                    'Bilinmeyen',
-                                avatarUrl: avatarUrl,
-                                isOnline:
-                                    true, // TODO: Redis ile online state eklenecek
-                                movieTitle: chat['movieTitle']?.toString() ??
-                                    'Bilinmeyen Film',
-                                moviePoster:
-                                    chat['moviePoster']?.toString() ?? '',
-                                lastMessage: chat['lastMessage']?.toString() ??
-                                    'Sohbete başla...',
-                                time:
-                                    _formatTime(chat['lastTimestamp'] as int?),
-                                unreadCount: (chat['unreadCount'] as int?) ?? 0,
-                                onTap: () {
-                                  final roomId =
-                                      chat['roomId']?.toString() ?? '';
-                                  final roomStatus =
-                                      chat['status']?.toString() ?? '';
-                                  final isUnmatched = roomStatus == 'unmatched';
-                                  Navigator.of(context)
-                                      .push(
-                                    MaterialPageRoute(
-                                      builder: (_) => ChatDetailScreen(
-                                        targetUserId:
-                                            chat['targetUserId']?.toString(),
-                                        roomId: roomId,
-                                        username:
-                                            chat['username']?.toString() ?? '',
-                                        avatarSeed:
-                                            chat['avatarSeed']?.toString() ??
-                                                '',
-                                        avatarUrl: avatarUrl,
-                                        isOnline: true,
-                                        movieTitle:
-                                            chat['movieTitle']?.toString() ??
-                                                '',
-                                        moviePoster:
-                                            chat['moviePoster']?.toString(),
-                                        initialMessages: const [], // Geçmiş içeride çekilecek
-                                        isUnmatched: isUnmatched,
-                                        unmatchedByUserId:
-                                            chat['unmatchedBy']?.toString(),
-                                      ),
-                                    ),
-                                  )
-                                      .then((_) {
-                                    // Geri dönünce listeyi tazele ki okundu bilgileri sıfırlansın
-                                    _loadChats();
-                                  });
-                                },
-                              ),
-                            );
-                          },
-                        ),
+              child: _buildBody(displayedChats),
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildBody(List<Map<String, dynamic>> displayedChats) {
+    if (_viewState == _ChatListViewState.initialLoading) {
+      return const Center(
+        child: CircularProgressIndicator(color: Colors.redAccent),
+      );
+    }
+
+    if (_viewState == _ChatListViewState.error && _chats.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 28),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.error_outline_rounded,
+                  color: Colors.orangeAccent, size: 38),
+              const SizedBox(height: 10),
+              Text(
+                _lastErrorMessage ?? 'Sohbetler yüklenemedi.',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white70, fontSize: 13),
+              ),
+              const SizedBox(height: 14),
+              ElevatedButton(
+                onPressed: () => _loadChats(rebindGlobalWs: true),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.redAccent,
+                ),
+                child: const Text('Tekrar Dene'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (displayedChats.isEmpty) {
+      return RefreshIndicator(
+        color: Colors.redAccent,
+        onRefresh: () => _loadChats(rebindGlobalWs: true, isRefresh: true),
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: [
+            SizedBox(height: MediaQuery.of(context).size.height * 0.25),
+            Center(
+              child: Text(
+                _isSearching
+                    ? 'Aradığınız kişiyle sohbet bulunamadı.'
+                    : 'Henüz hiç eşleşmen veya sohbetin yok.',
+                style: const TextStyle(color: Colors.white54),
+              ),
+            ),
+            if (_isRefreshing) ...[
+              const SizedBox(height: 14),
+              const Center(
+                child: SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.redAccent,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      );
+    }
+
+    return RefreshIndicator(
+      color: Colors.redAccent,
+      onRefresh: () => _loadChats(rebindGlobalWs: false, isRefresh: true),
+      child: Stack(
+        children: [
+          ListView.separated(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            itemCount: displayedChats.length,
+            separatorBuilder: (_, __) => Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Divider(
+                color: Colors.white.withValues(alpha: 0.06),
+                height: 1,
+              ),
+            ),
+            itemBuilder: (context, index) {
+              final chat = displayedChats[index];
+              final avatarRaw = (chat['avatarUrl'] ?? '').toString().trim();
+              final avatarUrl = avatarRaw.isEmpty
+                  ? ''
+                  : (avatarRaw.startsWith('http://') ||
+                          avatarRaw.startsWith('https://')
+                      ? avatarRaw
+                      : (avatarRaw.startsWith('/')
+                          ? '${ApiService.baseUrl}$avatarRaw'
+                          : '${ApiService.baseUrl}/$avatarRaw'));
+
+              final roomId = (chat['roomId'] ?? '').toString();
+
+              return _SwipeToDeleteChatItem(
+                key: ValueKey('chat-swipe-$roomId-$index'),
+                onDelete: () => _deleteChatForMe(roomId),
+                child: _ChatCard(
+                  username: chat['username']?.toString() ?? 'Bilinmeyen',
+                  avatarUrl: avatarUrl,
+                  isOnline: true,
+                  movieTitle:
+                      chat['movieTitle']?.toString() ?? 'Bilinmeyen Film',
+                  moviePoster: chat['moviePoster']?.toString() ?? '',
+                  lastMessage:
+                      chat['lastMessage']?.toString() ?? 'Sohbete başla...',
+                  time: _formatTime(chat['lastTimestamp'] as int?),
+                  unreadCount: (chat['unreadCount'] as int?) ?? 0,
+                  onTap: () {
+                    final roomId = chat['roomId']?.toString() ?? '';
+                    final roomStatus = chat['status']?.toString() ?? '';
+                    final isUnmatched = roomStatus == 'unmatched';
+                    Navigator.of(context)
+                        .push(
+                      MaterialPageRoute(
+                        builder: (_) => ChatDetailScreen(
+                          targetUserId: chat['targetUserId']?.toString(),
+                          roomId: roomId,
+                          username: chat['username']?.toString() ?? '',
+                          avatarSeed: chat['avatarSeed']?.toString() ?? '',
+                          avatarUrl: avatarUrl,
+                          isOnline: true,
+                          movieTitle: chat['movieTitle']?.toString() ?? '',
+                          moviePoster: chat['moviePoster']?.toString(),
+                          initialMessages: const [],
+                          isUnmatched: isUnmatched,
+                          unmatchedByUserId: chat['unmatchedBy']?.toString(),
+                        ),
+                      ),
+                    )
+                        .then((_) {
+                      _loadChats();
+                    });
+                  },
+                ),
+              );
+            },
+          ),
+          if (_isRefreshing)
+            Positioned(
+              top: 10,
+              right: 24,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1A1A1A),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: Colors.white12),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      width: 12,
+                      height: 12,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.redAccent,
+                      ),
+                    ),
+                    SizedBox(width: 6),
+                    Text(
+                      'Yenileniyor',
+                      style: TextStyle(color: Colors.white60, fontSize: 11),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }

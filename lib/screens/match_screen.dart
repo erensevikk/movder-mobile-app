@@ -16,6 +16,10 @@ class MatchScreen extends StatefulWidget {
 class MatchScreenState extends State<MatchScreen>
     with TickerProviderStateMixin {
   static const Duration _searchPollInterval = Duration(milliseconds: 500);
+  // Search polling için exponential backoff
+  static const Duration _maxSearchPollInterval = Duration(seconds: 2);
+  // Mevcut poll interval (exponential backoff için)
+  Duration _currentPollInterval = _searchPollInterval;
 
   bool _isScreenVisible = false;
 
@@ -357,6 +361,8 @@ class MatchScreenState extends State<MatchScreen>
     if (_isSearching || !_isWatching) return;
 
     final currentRequestId = ++_searchRequestId;
+    // Her aramada interval'i sıfırla
+    _currentPollInterval = _searchPollInterval;
 
     setState(() {
       _isSearching = true;
@@ -375,6 +381,8 @@ class MatchScreenState extends State<MatchScreen>
       if (!context.mounted || currentRequestId != _searchRequestId) break;
 
       if (matchRes != null && matchRes['matched'] == true) {
+        // Eşleşme bulundu - interval'i sıfırla
+        _currentPollInterval = _searchPollInterval;
         keepSearching = false;
         final matchData = matchRes['match'];
 
@@ -431,9 +439,20 @@ class MatchScreenState extends State<MatchScreen>
             _isSearching = true; // Tekrar arama UI'sine dön
           });
           _startDots();
+          // Interval'i sıfırla çünkü yeni arama başladı
+          _currentPollInterval = _searchPollInterval;
         }
       } else {
-        await Future.delayed(_searchPollInterval);
+        // Eşleşme bulunamadı - exponential backoff uygula
+        await Future.delayed(_currentPollInterval);
+        // Bir sonraki bekleme süresini artır (max'e kadar)
+        _currentPollInterval = Duration(
+          milliseconds:
+              (_currentPollInterval.inMilliseconds * 1.5).round().clamp(
+                    _searchPollInterval.inMilliseconds,
+                    _maxSearchPollInterval.inMilliseconds,
+                  ),
+        );
       }
     }
   }
@@ -443,6 +462,8 @@ class MatchScreenState extends State<MatchScreen>
       _isSearching = false;
       _searchRequestId++; // Break the loop
     });
+    // Interval'i sıfırla
+    _currentPollInterval = _searchPollInterval;
     _stopDots();
 
     if (_watchingTmdbId > 0) {
@@ -1246,7 +1267,9 @@ class _MatchFoundOverlayState extends State<MatchFoundOverlay>
   }
 
   void _startCountdown() {
-    _countdownTimer = Timer.periodic(const Duration(milliseconds: 50), (timer) {
+    // OPTIMIZED: 100ms interval yeterli hassasiyet sağlar, 50ms yerine daha az CPU kullanır
+    _countdownTimer =
+        Timer.periodic(const Duration(milliseconds: 100), (timer) {
       if (!mounted) {
         timer.cancel();
         return;

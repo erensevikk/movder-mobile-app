@@ -1,13 +1,10 @@
 package controllers
 
 import (
-	"context"
-	"net/http"
-	"strings"
-	"time"
-
 	"movder-backend/config"
 	"movder-backend/models"
+	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson"
@@ -74,20 +71,22 @@ func canViewerSeeWatching(viewerIDHex string, viewerID, targetID primitive.Objec
 
 func GetPrivacySettings() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel, _ := requestContext(c)
 		defer cancel()
 
-		userIDHex := c.GetString("userId")
-		objectID, err := primitive.ObjectIDFromHex(userIDHex)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz kullanıcı kimliği!"})
+		userIDHex, ok := mustUserID(c)
+		if !ok {
+			return
+		}
+		objectID, ok := parseObjectIDOrBadRequest(c, userIDHex, "kullanıcı kimliği")
+		if !ok {
 			return
 		}
 
 		var user models.User
 		userCollection := config.GetCollection(config.DB, "users")
 		if err := userCollection.FindOne(ctx, bson.M{"_id": objectID}).Decode(&user); err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Kullanıcı bulunamadı"})
+			errorResponse(c, http.StatusNotFound, "USER_NOT_FOUND", "Kullanıcı bulunamadı", err.Error())
 			return
 		}
 
@@ -99,20 +98,22 @@ func GetPrivacySettings() gin.HandlerFunc {
 
 func UpdatePrivacySettings() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel, _ := requestContext(c)
 		defer cancel()
 
-		userIDHex := c.GetString("userId")
-		objectID, err := primitive.ObjectIDFromHex(userIDHex)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz kullanıcı kimliği!"})
+		userIDHex, ok := mustUserID(c)
+		if !ok {
+			return
+		}
+		objectID, ok := parseObjectIDOrBadRequest(c, userIDHex, "kullanıcı kimliği")
+		if !ok {
 			return
 		}
 
 		var existing models.User
 		userCollection := config.GetCollection(config.DB, "users")
 		if err := userCollection.FindOne(ctx, bson.M{"_id": objectID}).Decode(&existing); err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Kullanıcı bulunamadı"})
+			errorResponse(c, http.StatusNotFound, "USER_NOT_FOUND", "Kullanıcı bulunamadı", err.Error())
 			return
 		}
 
@@ -121,7 +122,7 @@ func UpdatePrivacySettings() gin.HandlerFunc {
 
 		var input map[string]interface{}
 		if err := c.ShouldBindJSON(&input); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz veri: " + err.Error()})
+			errorResponse(c, http.StatusBadRequest, "INVALID_BODY", "Geçersiz veri", err.Error())
 			return
 		}
 
@@ -143,13 +144,13 @@ func UpdatePrivacySettings() gin.HandlerFunc {
 
 		next = normalizePrivacySettings(&next)
 
-		_, err = userCollection.UpdateOne(
+		_, err := userCollection.UpdateOne(
 			ctx,
 			bson.M{"_id": objectID},
 			bson.M{"$set": bson.M{"privacy_settings": next}},
 		)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Gizlilik ayarları güncellenemedi"})
+			errorResponse(c, http.StatusInternalServerError, "PRIVACY_UPDATE_FAILED", "Gizlilik ayarları güncellenemedi", err.Error())
 			return
 		}
 

@@ -1,7 +1,6 @@
 package controllers
 
 import (
-	"context"
 	"movder-backend/config"
 	"net/http"
 	"time"
@@ -26,12 +25,11 @@ type Notification struct {
 
 func GetNotifications() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel, _ := requestContext(c)
 		defer cancel()
 
-		userIDHex := c.GetString("userId")
-		if userIDHex == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Yetkisiz erisim"})
+		userIDHex, ok := mustUserID(c)
+		if !ok {
 			return
 		}
 
@@ -40,14 +38,14 @@ func GetNotifications() gin.HandlerFunc {
 
 		cursor, err := notifCol.Find(ctx, bson.M{"userId": userIDHex}, findOptions)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Bildirimler alinamadi"})
+			errorResponse(c, http.StatusInternalServerError, "NOTIFICATIONS_FETCH_FAILED", "Bildirimler alınamadı", err.Error())
 			return
 		}
 		defer cursor.Close(ctx)
 
 		var notifications []Notification
 		if err = cursor.All(ctx, &notifications); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Veri cozumleme hatasi"})
+			errorResponse(c, http.StatusInternalServerError, "NOTIFICATIONS_DECODE_FAILED", "Bildirim verileri çözümlenemedi", err.Error())
 			return
 		}
 
@@ -61,66 +59,73 @@ func GetNotifications() gin.HandlerFunc {
 
 func MarkAsRead() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel, _ := requestContext(c)
 		defer cancel()
 
-		userIDHex := c.GetString("userId")
-		notifID := c.Param("id")
+		userIDHex, ok := mustUserID(c)
+		if !ok {
+			return
+		}
 
-		objID, err := primitive.ObjectIDFromHex(notifID)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Gecersiz bildirim ID'si"})
+		notifID := c.Param("id")
+		objID, ok := parseObjectIDOrBadRequest(c, notifID, "bildirim kimliği")
+		if !ok {
 			return
 		}
 
 		notifCol := config.GetCollection(config.DB, "notifications")
-		_, err = notifCol.UpdateOne(
+		_, err := notifCol.UpdateOne(
 			ctx,
 			bson.M{"_id": objID, "userId": userIDHex},
 			bson.M{"$set": bson.M{"isRead": true}},
 		)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Bildirim guncellenemedi"})
+			errorResponse(c, http.StatusInternalServerError, "NOTIFICATION_UPDATE_FAILED", "Bildirim güncellenemedi", err.Error())
 			return
 		}
 
-		c.JSON(http.StatusOK, gin.H{"message": "Bildirim okundu olarak isaretlendi"})
+		c.JSON(http.StatusOK, gin.H{"message": "Bildirim okundu olarak işaretlendi"})
 	}
 }
 
 func MarkAllAsRead() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel, _ := requestContext(c)
 		defer cancel()
 
-		userIDHex := c.GetString("userId")
-		notifCol := config.GetCollection(config.DB, "notifications")
+		userIDHex, ok := mustUserID(c)
+		if !ok {
+			return
+		}
 
+		notifCol := config.GetCollection(config.DB, "notifications")
 		_, err := notifCol.UpdateMany(
 			ctx,
 			bson.M{"userId": userIDHex, "isRead": false},
 			bson.M{"$set": bson.M{"isRead": true}},
 		)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Bildirimler guncellenemedi"})
+			errorResponse(c, http.StatusInternalServerError, "NOTIFICATIONS_UPDATE_FAILED", "Bildirimler güncellenemedi", err.Error())
 			return
 		}
 
-		c.JSON(http.StatusOK, gin.H{"message": "Tum bildirimler okundu olarak isaretlendi"})
+		c.JSON(http.StatusOK, gin.H{"message": "Tüm bildirimler okundu olarak işaretlendi"})
 	}
 }
 
 func DeleteNotification() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel, _ := requestContext(c)
 		defer cancel()
 
-		userIDHex := c.GetString("userId")
-		notifID := c.Param("id")
+		userIDHex, ok := mustUserID(c)
+		if !ok {
+			return
+		}
 
-		objID, err := primitive.ObjectIDFromHex(notifID)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Gecersiz bildirim ID'si"})
+		notifID := c.Param("id")
+		objID, ok := parseObjectIDOrBadRequest(c, notifID, "bildirim kimliği")
+		if !ok {
 			return
 		}
 
@@ -130,11 +135,11 @@ func DeleteNotification() gin.HandlerFunc {
 			"userId": userIDHex,
 		})
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Bildirim silinemedi"})
+			errorResponse(c, http.StatusInternalServerError, "NOTIFICATION_DELETE_FAILED", "Bildirim silinemedi", err.Error())
 			return
 		}
 		if result.DeletedCount == 0 {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Bildirim bulunamadi"})
+			errorResponse(c, http.StatusNotFound, "NOTIFICATION_NOT_FOUND", "Bildirim bulunamadı", nil)
 			return
 		}
 

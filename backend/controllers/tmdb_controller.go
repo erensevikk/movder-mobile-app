@@ -16,18 +16,18 @@ func SearchMovies() gin.HandlerFunc {
 		query := strings.TrimSpace(c.Query("q"))
 
 		if len(query) == 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Arama sorgusu boş olamaz"})
+			errorResponse(c, http.StatusBadRequest, "EMPTY_QUERY", "Arama sorgusu boş olamaz", nil)
 			return
 		}
 
 		if len(query) > 100 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Arama sorgusu en fazla 100 karakter olabilir"})
+			errorResponse(c, http.StatusBadRequest, "QUERY_TOO_LONG", "Arama sorgusu en fazla 100 karakter olabilir", nil)
 			return
 		}
 
 		results, err := services.SearchMovies(query)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Film araması başarısız: " + err.Error()})
+			errorResponse(c, http.StatusInternalServerError, "MOVIE_SEARCH_FAILED", "Film araması başarısız", err.Error())
 			return
 		}
 
@@ -46,13 +46,13 @@ func GetMovieDetails() gin.HandlerFunc {
 		idStr := c.Param("id")
 		tmdbID, err := strconv.Atoi(idStr)
 		if err != nil || tmdbID <= 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz film ID"})
+			errorResponse(c, http.StatusBadRequest, "INVALID_TMDB_ID", "Geçersiz film ID", nil)
 			return
 		}
 
 		movie, err := services.GetMovieDetails(tmdbID)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Film detayı alınamadı: " + err.Error()})
+			errorResponse(c, http.StatusInternalServerError, "MOVIE_DETAILS_FAILED", "Film detayı alınamadı", err.Error())
 			return
 		}
 
@@ -65,7 +65,7 @@ func GetTrending() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		results, err := services.GetTrending()
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Trend filmler alınamadı: " + err.Error()})
+			errorResponse(c, http.StatusInternalServerError, "TRENDING_FETCH_FAILED", "Trend filmler alınamadı", err.Error())
 			return
 		}
 
@@ -81,7 +81,7 @@ func GetDiscoverMovies() gin.HandlerFunc {
 
 		results, err := services.GetDiscoverMovies(genres, sortBy)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Filmler alınamadı: " + err.Error()})
+			errorResponse(c, http.StatusInternalServerError, "DISCOVER_FETCH_FAILED", "Filmler alınamadı", err.Error())
 			return
 		}
 

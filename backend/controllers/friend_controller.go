@@ -23,13 +23,15 @@ import (
 // 5. Hiçbiri yoksa → pending kaydı oluşturulur.
 func SendFriendRequest() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel, _ := requestContext(c)
 		defer cancel()
 
-		fromIDStr := c.GetString("userId")
-		fromID, err := primitive.ObjectIDFromHex(fromIDStr)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz kullanıcı kimliği"})
+		fromIDStr, ok := mustUserID(c)
+		if !ok {
+			return
+		}
+		fromID, ok := parseObjectIDOrBadRequest(c, fromIDStr, "kullanıcı kimliği")
+		if !ok {
 			return
 		}
 
@@ -37,19 +39,18 @@ func SendFriendRequest() gin.HandlerFunc {
 			TargetUserID string `json:"targetUserId" binding:"required"`
 		}
 		if err := c.ShouldBindJSON(&input); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "targetUserId zorunlu"})
+			errorResponse(c, http.StatusBadRequest, "INVALID_BODY", "targetUserId zorunlu", err.Error())
 			return
 		}
 
-		toID, err := primitive.ObjectIDFromHex(input.TargetUserID)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz hedef kullanıcı kimliği"})
+		toID, ok := parseObjectIDOrBadRequest(c, input.TargetUserID, "hedef kullanıcı kimliği")
+		if !ok {
 			return
 		}
 
 		// 1. Kendine istek gönderme engeli
 		if fromID == toID {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Kendinize arkadaşlık isteği gönderemezsiniz"})
+			errorResponse(c, http.StatusBadRequest, "SELF_REQUEST_FORBIDDEN", "Kendinize arkadaşlık isteği gönderemezsiniz", nil)
 			return
 		}
 
@@ -59,12 +60,12 @@ func SendFriendRequest() gin.HandlerFunc {
 		// 2. Zaten arkadaş mı?
 		var fromUser models.User
 		if err := userCol.FindOne(ctx, bson.M{"_id": fromID}).Decode(&fromUser); err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Kullanıcı bulunamadı"})
+			errorResponse(c, http.StatusNotFound, "USER_NOT_FOUND", "Kullanıcı bulunamadı", err.Error())
 			return
 		}
 		for _, fid := range fromUser.Friends {
 			if fid == toID {
-				c.JSON(http.StatusConflict, gin.H{"error": "Zaten arkadaşsınız"})
+				errorResponse(c, http.StatusConflict, "ALREADY_FRIENDS", "Zaten arkadaşsınız", nil)
 				return
 			}
 		}
@@ -98,7 +99,7 @@ func SendFriendRequest() gin.HandlerFunc {
 
 			if err1 != nil || err2 != nil {
 				log.Printf("[FRIEND] arkadaşlık yazma hatası: err1=%v err2=%v", err1, err2)
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "Arkadaşlık oluşturulamadı"})
+				errorResponse(c, http.StatusInternalServerError, "FRIENDSHIP_CREATE_FAILED", "Arkadaşlık oluşturulamadı", gin.H{"err1": err1, "err2": err2})
 				return
 			}
 
@@ -120,7 +121,7 @@ func SendFriendRequest() gin.HandlerFunc {
 			CreatedAt: time.Now(),
 		}
 		if _, err := friendReqCol.InsertOne(ctx, req); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "İstek kaydedilemedi"})
+			errorResponse(c, http.StatusInternalServerError, "FRIEND_REQUEST_CREATE_FAILED", "İstek kaydedilemedi", err.Error())
 			return
 		}
 
@@ -150,13 +151,15 @@ func SendFriendRequest() gin.HandlerFunc {
 // GetFriends — Kullanıcının arkadaş listesini döner
 func GetFriends() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel, _ := requestContext(c)
 		defer cancel()
 
-		userIDStr := c.GetString("userId")
-		userID, err := primitive.ObjectIDFromHex(userIDStr)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz kullanıcı kimliği"})
+		userIDStr, ok := mustUserID(c)
+		if !ok {
+			return
+		}
+		userID, ok := parseObjectIDOrBadRequest(c, userIDStr, "kullanıcı kimliği")
+		if !ok {
 			return
 		}
 
@@ -165,7 +168,7 @@ func GetFriends() gin.HandlerFunc {
 		// Kendi profilini çek (friends listesi ile)
 		var user models.User
 		if err := userCol.FindOne(ctx, bson.M{"_id": userID}).Decode(&user); err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Kullanıcı bulunamadı"})
+			errorResponse(c, http.StatusNotFound, "USER_NOT_FOUND", "Kullanıcı bulunamadı", err.Error())
 			return
 		}
 
@@ -178,14 +181,14 @@ func GetFriends() gin.HandlerFunc {
 		cursor, err := userCol.Find(ctx, bson.M{"_id": bson.M{"$in": user.Friends}},
 			options.Find().SetProjection(bson.M{"password": 0}))
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Arkadaşlar getirilemedi"})
+			errorResponse(c, http.StatusInternalServerError, "FRIENDS_FETCH_FAILED", "Arkadaşlar getirilemedi", err.Error())
 			return
 		}
 		defer cursor.Close(ctx)
 
 		var friends []bson.M
 		if err := cursor.All(ctx, &friends); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Arkadaş verisi okunamadı"})
+			errorResponse(c, http.StatusInternalServerError, "FRIENDS_DECODE_FAILED", "Arkadaş verisi okunamadı", err.Error())
 			return
 		}
 
@@ -196,20 +199,21 @@ func GetFriends() gin.HandlerFunc {
 // RemoveFriend — Arkadaşlıktan çıkarma (karşılıklı)
 func RemoveFriend() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel, _ := requestContext(c)
 		defer cancel()
 
-		userIDStr := c.GetString("userId")
-		userID, err := primitive.ObjectIDFromHex(userIDStr)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz kullanıcı kimliği"})
+		userIDStr, ok := mustUserID(c)
+		if !ok {
+			return
+		}
+		userID, ok := parseObjectIDOrBadRequest(c, userIDStr, "kullanıcı kimliği")
+		if !ok {
 			return
 		}
 
 		friendIDStr := c.Param("friendId")
-		friendID, err := primitive.ObjectIDFromHex(friendIDStr)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz arkadaş kimliği"})
+		friendID, ok := parseObjectIDOrBadRequest(c, friendIDStr, "arkadaş kimliği")
+		if !ok {
 			return
 		}
 
@@ -222,7 +226,7 @@ func RemoveFriend() gin.HandlerFunc {
 			bson.M{"$pull": bson.M{"friends": userID}})
 
 		if err1 != nil || err2 != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Arkadaşlık kaldırılamadı"})
+			errorResponse(c, http.StatusInternalServerError, "FRIEND_REMOVE_FAILED", "Arkadaşlık kaldırılamadı", gin.H{"err1": err1, "err2": err2})
 			return
 		}
 
@@ -270,20 +274,21 @@ func notifyFriendStatusChanged(userA, userB string) {
 // Dönebilecek status değerleri: "none", "pending_sent", "pending_received", "friends"
 func GetFriendStatus() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel, _ := requestContext(c)
 		defer cancel()
 
-		userIDStr := c.GetString("userId")
-		userID, err := primitive.ObjectIDFromHex(userIDStr)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz kullanıcı kimliği"})
+		userIDStr, ok := mustUserID(c)
+		if !ok {
+			return
+		}
+		userID, ok := parseObjectIDOrBadRequest(c, userIDStr, "kullanıcı kimliği")
+		if !ok {
 			return
 		}
 
 		targetIDStr := c.Param("targetId")
-		targetID, err := primitive.ObjectIDFromHex(targetIDStr)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz hedef kimliği"})
+		targetID, ok := parseObjectIDOrBadRequest(c, targetIDStr, "hedef kimliği")
+		if !ok {
 			return
 		}
 

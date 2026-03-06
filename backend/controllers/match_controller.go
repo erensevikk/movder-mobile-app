@@ -11,20 +11,22 @@ import (
 // CheckMatch — Kullanıcının mevcut izlediği film için eşleşme olup olmadığını kontrol eder
 func CheckMatch() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userId := c.GetString("userId")
+		userID, ok := mustUserID(c)
+		if !ok {
+			return
+		}
 
-		tmdbIdStr := c.Query("tmdbId")
-		tmdbID, err := strconv.Atoi(tmdbIdStr)
+		tmdbID, err := strconv.Atoi(c.Query("tmdbId"))
 		if err != nil || tmdbID <= 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçerli bir tmdbId gerekli"})
+			errorResponse(c, http.StatusBadRequest, "INVALID_TMDB_ID", "Geçerli bir tmdbId gerekli", nil)
 			return
 		}
 
 		localOnly := c.Query("localOnly") == "1" || c.Query("localOnly") == "true"
 
-		result, err := services.CheckForMatch(userId, tmdbID, localOnly)
+		result, err := services.CheckForMatch(userID, tmdbID, localOnly)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Eşleşme kontrolü başarısız"})
+			errorResponse(c, http.StatusInternalServerError, "MATCH_CHECK_FAILED", "Eşleşme kontrolü başarısız", err.Error())
 			return
 		}
 
@@ -49,7 +51,7 @@ func GetQueueCount() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		count, err := services.GetTotalQueueCount()
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Kuyruk okunamadı"})
+			errorResponse(c, http.StatusInternalServerError, "QUEUE_READ_FAILED", "Kuyruk okunamadı", err.Error())
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"queueCount": count})
@@ -59,18 +61,21 @@ func GetQueueCount() gin.HandlerFunc {
 // CancelMatch — Eşleşme aramasını iptal eder ve kuyruktaki isteğini siler
 func CancelMatch() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userId := c.GetString("userId")
+		userID, ok := mustUserID(c)
+		if !ok {
+			return
+		}
 
 		var body struct {
 			TmdbID int `json:"tmdbId"`
 		}
 
 		if err := c.ShouldBindJSON(&body); err != nil || body.TmdbID <= 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçerli bir tmdbId gerekli"})
+			errorResponse(c, http.StatusBadRequest, "INVALID_BODY", "Geçerli bir tmdbId gerekli", nil)
 			return
 		}
 
-		services.CancelMatchRequest(userId, body.TmdbID)
+		services.CancelMatchRequest(userID, body.TmdbID)
 
 		c.JSON(http.StatusOK, gin.H{"message": "Arama iptal edildi, kuyruktan çıkıldı."})
 	}
@@ -81,20 +86,23 @@ func CancelMatch() gin.HandlerFunc {
 // Body: { "roomId": "...", "targetUserId": "..." }
 func AcceptMatch() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userId := c.GetString("userId")
+		userID, ok := mustUserID(c)
+		if !ok {
+			return
+		}
 
 		var body struct {
 			RoomID       string `json:"roomId"`
 			TargetUserID string `json:"targetUserId"`
 		}
 		if err := c.ShouldBindJSON(&body); err != nil || body.RoomID == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "roomId gerekli"})
+			errorResponse(c, http.StatusBadRequest, "INVALID_BODY", "roomId gerekli", nil)
 			return
 		}
 
-		result, err := services.AcceptMatchAndGetRoom(userId, body.RoomID, body.TargetUserID)
+		result, err := services.AcceptMatchAndGetRoom(userID, body.RoomID, body.TargetUserID)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			errorResponse(c, http.StatusInternalServerError, "MATCH_ACCEPT_FAILED", "Eşleşme kabul edilemedi", err.Error())
 			return
 		}
 
@@ -106,20 +114,23 @@ func AcceptMatch() gin.HandlerFunc {
 // Body: { "roomId": "...", "targetUserId": "..." }
 func RejectMatch() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userId := c.GetString("userId")
+		userID, ok := mustUserID(c)
+		if !ok {
+			return
+		}
 
 		var body struct {
 			RoomID       string `json:"roomId"`
 			TargetUserID string `json:"targetUserId"`
 		}
 		if err := c.ShouldBindJSON(&body); err != nil || body.RoomID == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "roomId gerekli"})
+			errorResponse(c, http.StatusBadRequest, "INVALID_BODY", "roomId gerekli", nil)
 			return
 		}
 
-		err := services.RejectMatch(userId, body.RoomID, body.TargetUserID)
+		err := services.RejectMatch(userID, body.RoomID, body.TargetUserID)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			errorResponse(c, http.StatusInternalServerError, "MATCH_REJECT_FAILED", "Eşleşme reddedilemedi", err.Error())
 			return
 		}
 
@@ -131,16 +142,19 @@ func RejectMatch() gin.HandlerFunc {
 // Query: ?roomId=...
 func GetAcceptStatus() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userId := c.GetString("userId")
+		userID, ok := mustUserID(c)
+		if !ok {
+			return
+		}
 		roomID := c.Query("roomId")
 		if roomID == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "roomId gerekli"})
+			errorResponse(c, http.StatusBadRequest, "MISSING_ROOM_ID", "roomId gerekli", nil)
 			return
 		}
 
-		result, err := services.GetAcceptStatus(userId, roomID)
+		result, err := services.GetAcceptStatus(userID, roomID)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			errorResponse(c, http.StatusInternalServerError, "MATCH_STATUS_FAILED", "Kabul durumu alınamadı", err.Error())
 			return
 		}
 

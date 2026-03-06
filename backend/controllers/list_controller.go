@@ -98,22 +98,25 @@ var (
 // CreateList â€” Yeni bir liste (Kategori) oluÅŸturur
 func CreateList() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userId := c.GetString("userId")
+		userId, ok := mustUserID(c)
+		if !ok {
+			return
+		}
 		var input models.CreateListInput
 
 		if err := c.ShouldBindJSON(&input); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "HatalÄ± girdi: " + err.Error()})
+			errorResponse(c, http.StatusBadRequest, "INVALID_BODY", "Hatalı girdi", err.Error())
 			return
 		}
 
 		input.Name = strings.TrimSpace(input.Name)
 		nameRegex := regexp.MustCompile(`^[a-zA-ZğüşıöçĞÜŞİÖÇ\s]+$`)
 		if !nameRegex.MatchString(input.Name) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Koleksiyon adı sadece harflerden oluşabilir."})
+			errorResponse(c, http.StatusBadRequest, "INVALID_LIST_NAME", "Koleksiyon adı sadece harflerden oluşabilir.", nil)
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel, _ := requestContext(c)
 		defer cancel()
 
 		collection := config.GetCollection(config.DB, "lists")
@@ -125,7 +128,7 @@ func CreateList() gin.HandlerFunc {
 			"name":   bson.M{"$regex": primitive.Regex{Pattern: "^" + regexp.QuoteMeta(input.Name) + "$", Options: "i"}},
 		}).Decode(&existing)
 		if err == nil {
-			c.JSON(http.StatusConflict, gin.H{"error": "Bu isimde bir koleksiyonunuz zaten mevcut."})
+			errorResponse(c, http.StatusConflict, "LIST_NAME_CONFLICT", "Bu isimde bir koleksiyonunuz zaten mevcut.", nil)
 			return
 		}
 
@@ -141,7 +144,7 @@ func CreateList() gin.HandlerFunc {
 		result, err := collection.InsertOne(ctx, newList)
 
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Liste oluÅŸturulamadÄ±"})
+			errorResponse(c, http.StatusInternalServerError, "LIST_CREATE_FAILED", "Liste oluşturulamadı", err.Error())
 			return
 		}
 
@@ -152,22 +155,25 @@ func CreateList() gin.HandlerFunc {
 // GetMyLists â€” KullanÄ±cÄ±nÄ±n oluÅŸturduÄŸu tÃ¼m listeleri (kategorileri) getirir
 func GetMyLists() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userId := c.GetString("userId")
+		userId, ok := mustUserID(c)
+		if !ok {
+			return
+		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel, _ := requestContext(c)
 		defer cancel()
 
 		collection := config.GetCollection(config.DB, "lists")
 		cursor, err := collection.Find(ctx, bson.M{"userId": userId})
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Listeler getirilemedi"})
+			errorResponse(c, http.StatusInternalServerError, "LISTS_QUERY_FAILED", "Listeler getirilemedi", err.Error())
 			return
 		}
 		defer cursor.Close(ctx)
 
 		var lists []models.List
 		if err = cursor.All(ctx, &lists); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Listeler okunamadÄ±"})
+			errorResponse(c, http.StatusInternalServerError, "LISTS_READ_FAILED", "Listeler okunamadı", err.Error())
 			return
 		}
 
@@ -178,29 +184,30 @@ func GetMyLists() gin.HandlerFunc {
 // GetUserLists — Belirli bir kullanıcının herkese açık listelerini (kategorilerini) getirir
 func GetUserLists() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		viewerIDHex := c.GetString("userId")
+		viewerIDHex, ok := mustUserID(c)
+		if !ok {
+			return
+		}
 		targetUserId := c.Param("userId")
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel, _ := requestContext(c)
 		defer cancel()
 
 		collection := config.GetCollection(config.DB, "lists")
 		userCollection := config.GetCollection(config.DB, "users")
 
-		viewerID, err := primitive.ObjectIDFromHex(viewerIDHex)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz kullanıcı kimliği"})
+		viewerID, ok := parseObjectIDOrBadRequest(c, viewerIDHex, "kullanıcı kimliği")
+		if !ok {
 			return
 		}
-		targetID, err := primitive.ObjectIDFromHex(targetUserId)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz hedef kullanıcı kimliği"})
+		targetID, ok := parseObjectIDOrBadRequest(c, targetUserId, "hedef kullanıcı kimliği")
+		if !ok {
 			return
 		}
 
 		var target models.User
 		if err := userCollection.FindOne(ctx, bson.M{"_id": targetID}).Decode(&target); err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Kullanıcı bulunamadı"})
+			errorResponse(c, http.StatusNotFound, "USER_NOT_FOUND", "Kullanıcı bulunamadı", nil)
 			return
 		}
 
@@ -220,14 +227,14 @@ func GetUserLists() gin.HandlerFunc {
 
 		cursor, err := collection.Find(ctx, filter)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Kullanıcının listeleri getirilemedi"})
+			errorResponse(c, http.StatusInternalServerError, "USER_LISTS_QUERY_FAILED", "Kullanıcının listeleri getirilemedi", err.Error())
 			return
 		}
 		defer cursor.Close(ctx)
 
 		var lists []models.List
 		if err = cursor.All(ctx, &lists); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Kullanıcının listeleri okunamadı"})
+			errorResponse(c, http.StatusInternalServerError, "USER_LISTS_READ_FAILED", "Kullanıcının listeleri okunamadı", err.Error())
 			return
 		}
 
@@ -238,35 +245,37 @@ func GetUserLists() gin.HandlerFunc {
 // AddMovieToList â€” Belirli bir listeye film ekler
 func AddMovieToList() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userId := c.GetString("userId")
+		userId, ok := mustUserID(c)
+		if !ok {
+			return
+		}
 		var input models.AddToListInput
 
 		if err := c.ShouldBindJSON(&input); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "HatalÄ± girdi: " + err.Error()})
+			errorResponse(c, http.StatusBadRequest, "INVALID_BODY", "Hatalı girdi", err.Error())
 			return
 		}
 
-		listObjId, err := primitive.ObjectIDFromHex(input.ListID)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "GeÃ§ersiz Liste ID'si"})
+		listObjId, ok := parseObjectIDOrBadRequest(c, input.ListID, "liste kimliği")
+		if !ok {
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel, _ := requestContext(c)
 		defer cancel()
 
 		listColl := config.GetCollection(config.DB, "lists")
 		var list models.List
-		err = listColl.FindOne(ctx, bson.M{"_id": listObjId, "userId": userId}).Decode(&list)
+		err := listColl.FindOne(ctx, bson.M{"_id": listObjId, "userId": userId}).Decode(&list)
 		if err != nil {
-			c.JSON(http.StatusForbidden, gin.H{"error": "Bu liste bulunamadÄ± veya size ait deÄŸil"})
+			errorResponse(c, http.StatusForbidden, "LIST_FORBIDDEN", "Bu liste bulunamadı veya size ait değil", nil)
 			return
 		}
 
 		itemColl := config.GetCollection(config.DB, "list_items")
 		count, _ := itemColl.CountDocuments(ctx, bson.M{"listId": listObjId, "tmdbId": input.TmdbID})
 		if count > 0 {
-			c.JSON(http.StatusConflict, gin.H{"error": "Bu film zaten bu listede mevcut"})
+			errorResponse(c, http.StatusConflict, "LIST_ITEM_CONFLICT", "Bu film zaten bu listede mevcut", nil)
 			return
 		}
 
@@ -281,52 +290,52 @@ func AddMovieToList() gin.HandlerFunc {
 
 		_, err = itemColl.InsertOne(ctx, newItem)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Film listeye eklenemedi"})
+			errorResponse(c, http.StatusInternalServerError, "LIST_ITEM_CREATE_FAILED", "Film listeye eklenemedi", err.Error())
 			return
 		}
 
 		_, _ = listColl.UpdateOne(ctx, bson.M{"_id": listObjId}, bson.M{"$set": bson.M{"updatedAt": time.Now()}})
-		c.JSON(http.StatusOK, gin.H{"message": "Film baÅŸarÄ±yla eklendi!"})
+		c.JSON(http.StatusOK, gin.H{"message": "Film başarıyla eklendi!"})
 	}
 }
 
 // GetListItems â€” Bir listenin iÃ§indeki tÃ¼m filmleri getirir
 func GetListItems() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		viewerIDHex := c.GetString("userId")
+		viewerIDHex, ok := mustUserID(c)
+		if !ok {
+			return
+		}
 		listIdStr := c.Param("listId")
-		listObjId, err := primitive.ObjectIDFromHex(listIdStr)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "GeÃ§ersiz Liste ID'si"})
+		listObjId, ok := parseObjectIDOrBadRequest(c, listIdStr, "liste kimliği")
+		if !ok {
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel, _ := requestContext(c)
 		defer cancel()
 
 		listColl := config.GetCollection(config.DB, "lists")
 		var list models.List
 		if err := listColl.FindOne(ctx, bson.M{"_id": listObjId}).Decode(&list); err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Liste bulunamadı"})
+			errorResponse(c, http.StatusNotFound, "LIST_NOT_FOUND", "Liste bulunamadı", nil)
 			return
 		}
 
 		if list.UserID != viewerIDHex {
 			userCollection := config.GetCollection(config.DB, "users")
-			viewerID, err := primitive.ObjectIDFromHex(viewerIDHex)
-			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz kullanıcı kimliği"})
+			viewerID, ok := parseObjectIDOrBadRequest(c, viewerIDHex, "kullanıcı kimliği")
+			if !ok {
 				return
 			}
-			targetID, err := primitive.ObjectIDFromHex(list.UserID)
-			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz liste sahibi kimliği"})
+			targetID, ok := parseObjectIDOrBadRequest(c, list.UserID, "liste sahibi kimliği")
+			if !ok {
 				return
 			}
 
 			var target models.User
 			if err := userCollection.FindOne(ctx, bson.M{"_id": targetID}).Decode(&target); err != nil {
-				c.JSON(http.StatusNotFound, gin.H{"error": "Liste sahibi bulunamadı"})
+				errorResponse(c, http.StatusNotFound, "LIST_OWNER_NOT_FOUND", "Liste sahibi bulunamadı", nil)
 				return
 			}
 
@@ -334,7 +343,7 @@ func GetListItems() gin.HandlerFunc {
 			privacy := userPrivacySettings(target)
 			canSeeDetails := canViewerSeeProfileDetails(viewerID, targetID, isFriend, privacy)
 			if !canSeeDetails || (privacy.ProfileVisibility == "public" && !list.IsPublic) {
-				c.JSON(http.StatusForbidden, gin.H{"error": "Bu listeyi görme yetkiniz yok"})
+				errorResponse(c, http.StatusForbidden, "LIST_FORBIDDEN", "Bu listeyi görme yetkiniz yok", nil)
 				return
 			}
 		}
@@ -343,14 +352,14 @@ func GetListItems() gin.HandlerFunc {
 		findOpts := options.Find().SetSort(bson.D{{Key: "position", Value: 1}, {Key: "addedAt", Value: 1}})
 		cursor, err := itemColl.Find(ctx, bson.M{"listId": listObjId}, findOpts)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Filmler getirilemedi"})
+			errorResponse(c, http.StatusInternalServerError, "LIST_ITEMS_QUERY_FAILED", "Filmler getirilemedi", err.Error())
 			return
 		}
 		defer cursor.Close(ctx)
 
 		var items []models.ListItem
 		if err = cursor.All(ctx, &items); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Filmler okunamadÄ±"})
+			errorResponse(c, http.StatusInternalServerError, "LIST_ITEMS_READ_FAILED", "Filmler okunamadı", err.Error())
 			return
 		}
 
@@ -361,42 +370,45 @@ func GetListItems() gin.HandlerFunc {
 // RemoveMovieFromList — Belirli bir listeden film siler
 func RemoveMovieFromList() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userId := c.GetString("userId")
-		listIdStr := c.Param("listId")
-		tmdbIdStr := c.Param("tmdbId")
-
-		listObjId, err := primitive.ObjectIDFromHex(listIdStr)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz Liste ID'si"})
+		userID, ok := mustUserID(c)
+		if !ok {
 			return
 		}
 
-		tmdbId, err := strconv.Atoi(tmdbIdStr)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz Film ID'si"})
+		listObjID, ok := parseObjectIDOrBadRequest(c, c.Param("listId"), "liste kimliği")
+		if !ok {
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		tmdbID, err := strconv.Atoi(c.Param("tmdbId"))
+		if err != nil {
+			errorResponse(c, http.StatusBadRequest, "INVALID_TMDB_ID", "Geçersiz film kimliği", nil)
+			return
+		}
+
+		ctx, cancel, _ := requestContext(c)
 		defer cancel()
 
 		listColl := config.GetCollection(config.DB, "lists")
 		var list models.List
-		err = listColl.FindOne(ctx, bson.M{"_id": listObjId, "userId": userId}).Decode(&list)
+		err = listColl.FindOne(ctx, bson.M{"_id": listObjID, "userId": userID}).Decode(&list)
 		if err != nil {
-			c.JSON(http.StatusForbidden, gin.H{"error": "Bu liste bulunamadı veya size ait değil"})
+			errorResponse(c, http.StatusForbidden, "LIST_FORBIDDEN", "Bu liste bulunamadı veya size ait değil", nil)
 			return
 		}
 
 		itemColl := config.GetCollection(config.DB, "list_items")
-
-		res, err := itemColl.DeleteOne(ctx, bson.M{"listId": listObjId, "tmdbId": tmdbId})
-		if err != nil || res.DeletedCount == 0 {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Film bu listede bulunamadı"})
+		res, err := itemColl.DeleteOne(ctx, bson.M{"listId": listObjID, "tmdbId": tmdbID})
+		if err != nil {
+			errorResponse(c, http.StatusInternalServerError, "LIST_ITEM_DELETE_FAILED", "Film listeden silinemedi", err.Error())
+			return
+		}
+		if res.DeletedCount == 0 {
+			errorResponse(c, http.StatusNotFound, "LIST_ITEM_NOT_FOUND", "Film bu listede bulunamadı", nil)
 			return
 		}
 
-		_, _ = listColl.UpdateOne(ctx, bson.M{"_id": listObjId}, bson.M{"$set": bson.M{"updatedAt": time.Now()}})
+		_, _ = listColl.UpdateOne(ctx, bson.M{"_id": listObjID}, bson.M{"$set": bson.M{"updatedAt": time.Now()}})
 		c.JSON(http.StatusOK, gin.H{"message": "Film başarıyla silindi!"})
 	}
 }
@@ -404,36 +416,34 @@ func RemoveMovieFromList() gin.HandlerFunc {
 // DeleteList — Bir listeyi ve içindeki tüm filmleri siler
 func DeleteList() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userId := c.GetString("userId")
-		listIdStr := c.Param("listId")
-
-		listObjId, err := primitive.ObjectIDFromHex(listIdStr)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz Liste ID'si"})
+		userID, ok := mustUserID(c)
+		if !ok {
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		listObjID, ok := parseObjectIDOrBadRequest(c, c.Param("listId"), "liste kimliği")
+		if !ok {
+			return
+		}
+
+		ctx, cancel, _ := requestContext(c)
 		defer cancel()
 
 		listColl := config.GetCollection(config.DB, "lists")
 
-		// Listenin sahibi bu kullanıcı mı kontrol et
 		var list models.List
-		err = listColl.FindOne(ctx, bson.M{"_id": listObjId, "userId": userId}).Decode(&list)
+		err := listColl.FindOne(ctx, bson.M{"_id": listObjID, "userId": userID}).Decode(&list)
 		if err != nil {
-			c.JSON(http.StatusForbidden, gin.H{"error": "Bu liste bulunamadı veya size ait değil"})
+			errorResponse(c, http.StatusForbidden, "LIST_FORBIDDEN", "Bu liste bulunamadı veya size ait değil", nil)
 			return
 		}
 
-		// Önce listedeki tüm öğeleri sil
 		itemColl := config.GetCollection(config.DB, "list_items")
-		_, _ = itemColl.DeleteMany(ctx, bson.M{"listId": listObjId})
+		_, _ = itemColl.DeleteMany(ctx, bson.M{"listId": listObjID})
 
-		// Sonra listeyi sil
-		_, err = listColl.DeleteOne(ctx, bson.M{"_id": listObjId})
+		_, err = listColl.DeleteOne(ctx, bson.M{"_id": listObjID})
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Liste silinemedi"})
+			errorResponse(c, http.StatusInternalServerError, "LIST_DELETE_FAILED", "Liste silinemedi", err.Error())
 			return
 		}
 
@@ -444,12 +454,13 @@ func DeleteList() gin.HandlerFunc {
 // RenameList — Bir listenin adını değiştirir
 func RenameList() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userId := c.GetString("userId")
-		listIdStr := c.Param("listId")
+		userID, ok := mustUserID(c)
+		if !ok {
+			return
+		}
 
-		listObjId, err := primitive.ObjectIDFromHex(listIdStr)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz Liste ID'si"})
+		listObjID, ok := parseObjectIDOrBadRequest(c, c.Param("listId"), "liste kimliği")
+		if !ok {
 			return
 		}
 
@@ -457,47 +468,49 @@ func RenameList() gin.HandlerFunc {
 			Name string `json:"name" binding:"required"`
 		}
 		if err := c.ShouldBindJSON(&input); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Yeni isim gerekli"})
+			errorResponse(c, http.StatusBadRequest, "INVALID_BODY", "Yeni isim gerekli", nil)
 			return
 		}
 
 		input.Name = strings.TrimSpace(input.Name)
 		if input.Name == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Liste adı boş olamaz"})
+			errorResponse(c, http.StatusBadRequest, "EMPTY_LIST_NAME", "Liste adı boş olamaz", nil)
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel, _ := requestContext(c)
 		defer cancel()
 
 		listColl := config.GetCollection(config.DB, "lists")
 
-		// Listenin sahibi bu kullanıcı mı kontrol et
 		var list models.List
-		err = listColl.FindOne(ctx, bson.M{"_id": listObjId, "userId": userId}).Decode(&list)
+		err := listColl.FindOne(ctx, bson.M{"_id": listObjID, "userId": userID}).Decode(&list)
 		if err != nil {
-			c.JSON(http.StatusForbidden, gin.H{"error": "Bu liste bulunamadı veya size ait değil"})
+			errorResponse(c, http.StatusForbidden, "LIST_FORBIDDEN", "Bu liste bulunamadı veya size ait değil", nil)
 			return
 		}
 
-		// Aynı isimde başka liste var mı kontrol et
 		nameRegex := primitive.Regex{Pattern: "^" + regexp.QuoteMeta(input.Name) + "$", Options: "i"}
 		var existing models.List
 		err = listColl.FindOne(ctx, bson.M{
-			"userId": userId,
+			"userId": userID,
 			"name":   bson.M{"$regex": nameRegex},
-			"_id":    bson.M{"$ne": listObjId},
+			"_id":    bson.M{"$ne": listObjID},
 		}).Decode(&existing)
 		if err == nil {
-			c.JSON(http.StatusConflict, gin.H{"error": "Bu isimde bir listeniz zaten var"})
+			errorResponse(c, http.StatusConflict, "LIST_NAME_CONFLICT", "Bu isimde bir listeniz zaten var", nil)
+			return
+		}
+		if err != mongo.ErrNoDocuments {
+			errorResponse(c, http.StatusInternalServerError, "LIST_LOOKUP_FAILED", "Liste doğrulanamadı", err.Error())
 			return
 		}
 
-		_, err = listColl.UpdateOne(ctx, bson.M{"_id": listObjId}, bson.M{
+		_, err = listColl.UpdateOne(ctx, bson.M{"_id": listObjID}, bson.M{
 			"$set": bson.M{"name": input.Name, "updatedAt": time.Now()},
 		})
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Liste adı güncellenemedi"})
+			errorResponse(c, http.StatusInternalServerError, "LIST_RENAME_FAILED", "Liste adı güncellenemedi", err.Error())
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"message": "Liste adı güncellendi!", "name": input.Name})
@@ -508,12 +521,13 @@ func RenameList() gin.HandlerFunc {
 // Body: { "tmdbIds": [38, 19404, 694, ...] } — yeni sıradaki tmdbId dizisi
 func ReorderList() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userId := c.GetString("userId")
-		listIdStr := c.Param("listId")
+		userID, ok := mustUserID(c)
+		if !ok {
+			return
+		}
 
-		listObjId, err := primitive.ObjectIDFromHex(listIdStr)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz Liste ID'si"})
+		listObjID, ok := parseObjectIDOrBadRequest(c, c.Param("listId"), "liste kimliği")
+		if !ok {
 			return
 		}
 
@@ -521,30 +535,29 @@ func ReorderList() gin.HandlerFunc {
 			TmdbIds []int `json:"tmdbIds" binding:"required"`
 		}
 		if err := c.ShouldBindJSON(&input); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "tmdbIds dizisi gerekli"})
+			errorResponse(c, http.StatusBadRequest, "INVALID_BODY", "tmdbIds dizisi gerekli", nil)
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		ctx, cancel, _ := requestContext(c)
 		defer cancel()
 
 		listColl := config.GetCollection(config.DB, "lists")
-
-		// Listenin sahibi kontrol et
 		var list models.List
-		if err = listColl.FindOne(ctx, bson.M{"_id": listObjId, "userId": userId}).Decode(&list); err != nil {
-			c.JSON(http.StatusForbidden, gin.H{"error": "Bu liste bulunamadı veya size ait değil"})
+		if err := listColl.FindOne(ctx, bson.M{"_id": listObjID, "userId": userID}).Decode(&list); err != nil {
+			errorResponse(c, http.StatusForbidden, "LIST_FORBIDDEN", "Bu liste bulunamadı veya size ait değil", nil)
 			return
 		}
 
 		itemColl := config.GetCollection(config.DB, "list_items")
-
-		// Her tmdbId'nin position'ını yeni index olarak güncelle
-		for i, tmdbId := range input.TmdbIds {
-			_, _ = itemColl.UpdateOne(ctx,
-				bson.M{"listId": listObjId, "tmdbId": tmdbId},
+		for i, tmdbID := range input.TmdbIds {
+			if _, err := itemColl.UpdateOne(ctx,
+				bson.M{"listId": listObjID, "tmdbId": tmdbID},
 				bson.M{"$set": bson.M{"position": i + 1}},
-			)
+			); err != nil {
+				errorResponse(c, http.StatusInternalServerError, "LIST_REORDER_FAILED", "Liste sıralaması güncellenemedi", err.Error())
+				return
+			}
 		}
 
 		c.JSON(http.StatusOK, gin.H{"message": "Sıralama güncellendi"})
@@ -555,34 +568,35 @@ func ReorderList() gin.HandlerFunc {
 func PreviewLetterboxdImport() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !isLetterboxdImportEnabled() {
-			c.JSON(http.StatusServiceUnavailable, gin.H{
-				"error":     "Letterboxd import ozelligi su anda kapali",
-				"errorCode": "IMPORT_DISABLED",
-			})
+			errorResponse(c, http.StatusServiceUnavailable, "IMPORT_DISABLED", "Letterboxd import ozelligi su anda kapali", nil)
 			return
 		}
 
-		userID := c.GetString("userId")
+		userID, ok := mustUserID(c)
+		if !ok {
+			return
+		}
+
 		fileHeader, err := c.FormFile("file")
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Yuklenecek dosya bulunamadi", "errorCode": "FILE_REQUIRED"})
+			errorResponse(c, http.StatusBadRequest, "FILE_REQUIRED", "Yuklenecek dosya bulunamadi", nil)
 			return
 		}
 
 		f, err := fileHeader.Open()
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Dosya acilamadi", "errorCode": "FILE_OPEN_FAILED"})
+			errorResponse(c, http.StatusBadRequest, "FILE_OPEN_FAILED", "Dosya acilamadi", err.Error())
 			return
 		}
 		defer f.Close()
 
 		payload, err := io.ReadAll(io.LimitReader(f, maxImportUploadBytes+1))
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Dosya okunamadi", "errorCode": "FILE_READ_FAILED"})
+			errorResponse(c, http.StatusBadRequest, "FILE_READ_FAILED", "Dosya okunamadi", err.Error())
 			return
 		}
 		if len(payload) > maxImportUploadBytes {
-			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "Dosya cok buyuk (max 10MB)", "errorCode": "UPLOAD_TOO_LARGE"})
+			errorResponse(c, http.StatusRequestEntityTooLarge, "UPLOAD_TOO_LARGE", "Dosya cok buyuk (max 10MB)", nil)
 			return
 		}
 
@@ -603,16 +617,16 @@ func PreviewLetterboxdImport() gin.HandlerFunc {
 		case res := <-parseCh:
 			lists, warnings, err = res.lists, res.warnings, res.err
 		case <-time.After(parseTimeout):
-			c.JSON(http.StatusRequestTimeout, gin.H{"error": "Dosya parse zaman asimina ugradi", "errorCode": "PARSE_TIMEOUT"})
+			errorResponse(c, http.StatusRequestTimeout, "PARSE_TIMEOUT", "Dosya parse zaman asimina ugradi", nil)
 			return
 		}
 
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "errorCode": "PARSE_FAILED"})
+			errorResponse(c, http.StatusBadRequest, "PARSE_FAILED", err.Error(), nil)
 			return
 		}
 		if len(lists) == 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Dosyada import edilecek liste bulunamadi", "errorCode": "NO_LIST_FOUND"})
+			errorResponse(c, http.StatusBadRequest, "NO_LIST_FOUND", "Dosyada import edilecek liste bulunamadi", nil)
 			return
 		}
 
@@ -635,7 +649,8 @@ func PreviewLetterboxdImport() gin.HandlerFunc {
 			}
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), importRequestTimeout)
+		c.Set("requestTimeout", importRequestTimeout)
+		ctx, cancel, _ := requestContext(c)
 		defer cancel()
 		conflicts := detectConflictCandidates(ctx, userID, lists)
 
@@ -685,17 +700,18 @@ func PreviewLetterboxdImport() gin.HandlerFunc {
 func CommitLetterboxdImport() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !isLetterboxdImportEnabled() {
-			c.JSON(http.StatusServiceUnavailable, gin.H{
-				"error":     "Letterboxd import ozelligi su anda kapali",
-				"errorCode": "IMPORT_DISABLED",
-			})
+			errorResponse(c, http.StatusServiceUnavailable, "IMPORT_DISABLED", "Letterboxd import ozelligi su anda kapali", nil)
 			return
 		}
 
-		userID := c.GetString("userId")
+		userID, ok := mustUserID(c)
+		if !ok {
+			return
+		}
+
 		var input importCommitInput
 		if err := c.ShouldBindJSON(&input); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Gecersiz istek govdesi", "errorCode": "INVALID_BODY"})
+			errorResponse(c, http.StatusBadRequest, "INVALID_BODY", "Gecersiz istek govdesi", nil)
 			return
 		}
 
@@ -704,7 +720,7 @@ func CommitLetterboxdImport() gin.HandlerFunc {
 			strategy = "merge"
 		}
 		if strategy != "merge" && strategy != "overwrite" && strategy != "duplicate" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Gecersiz strategy: merge | overwrite | duplicate", "errorCode": "INVALID_STRATEGY"})
+			errorResponse(c, http.StatusBadRequest, "INVALID_STRATEGY", "Gecersiz strategy: merge | overwrite | duplicate", nil)
 			return
 		}
 
@@ -716,19 +732,20 @@ func CommitLetterboxdImport() gin.HandlerFunc {
 		importPreviewStoreMu.Unlock()
 
 		if !ok {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Preview bulunamadi veya suresi doldu", "errorCode": "PREVIEW_NOT_FOUND"})
+			errorResponse(c, http.StatusNotFound, "PREVIEW_NOT_FOUND", "Preview bulunamadi veya suresi doldu", nil)
 			return
 		}
 		if preview.UserID != userID {
-			c.JSON(http.StatusForbidden, gin.H{"error": "Bu preview size ait degil", "errorCode": "PREVIEW_FORBIDDEN"})
+			errorResponse(c, http.StatusForbidden, "PREVIEW_FORBIDDEN", "Bu preview size ait degil", nil)
 			return
 		}
 		if time.Since(preview.CreatedAt) > previewTTL {
-			c.JSON(http.StatusGone, gin.H{"error": "Preview suresi doldu", "errorCode": "PREVIEW_EXPIRED"})
+			errorResponse(c, http.StatusGone, "PREVIEW_EXPIRED", "Preview suresi doldu", nil)
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), importRequestTimeout)
+		c.Set("requestTimeout", importRequestTimeout)
+		ctx, cancel, _ := requestContext(c)
 		defer cancel()
 
 		listColl := config.GetCollection(config.DB, "lists")
@@ -746,7 +763,7 @@ func CommitLetterboxdImport() gin.HandlerFunc {
 		for _, incoming := range preview.Lists {
 			listID, existed, err := resolveTargetList(ctx, listColl, itemColl, userID, incoming, strategy)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "Liste yazilirken hata olustu", "errorCode": "LIST_WRITE_FAILED"})
+				errorResponse(c, http.StatusInternalServerError, "LIST_WRITE_FAILED", "Liste yazilirken hata olustu", err.Error())
 				return
 			}
 			if existed {

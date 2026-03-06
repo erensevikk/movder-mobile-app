@@ -63,24 +63,36 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
     List<Map<String, dynamic>> listsData = [];
     if (widget.isMe) {
       listsData = await ApiService.getMyLists();
-      // Her liste için film içeriklerini çekelim
-      for (var list in listsData) {
-        final id = list['id'] ?? list['_id'];
-        if (id != null) {
-          list['items'] = await ApiService.getListItems(id.toString());
-        } else {
-          list['items'] = [];
-        }
-      }
     } else if (data?['canSeeProfileDetails'] == true) {
       listsData = await ApiService.getUserLists(widget.userId);
-      for (var list in listsData) {
+    }
+
+    // OPTIMIZED: N+1 sorununu çözmek için tüm liste item'larını paralel olarak çek
+    if (listsData.isNotEmpty) {
+      final listFutures = listsData.map((list) async {
         final id = list['id'] ?? list['_id'];
         if (id != null) {
-          list['items'] = await ApiService.getListItems(id.toString());
-        } else {
-          list['items'] = [];
+          try {
+            final items = await ApiService.getListItems(id.toString());
+            return {'id': id, 'items': items};
+          } catch (e) {
+            return {'id': id, 'items': <Map<String, dynamic>>[]};
+          }
         }
+        return {'id': id, 'items': <Map<String, dynamic>>[]};
+      }).toList();
+
+      // Tüm API çağrılarını paralel olarak yap
+      final listResults = await Future.wait(listFutures);
+
+      // Sonuçları listelere ata
+      final itemsMap = {
+        for (var r in listResults)
+          r['id'].toString(): r['items'] as List<Map<String, dynamic>>
+      };
+      for (var list in listsData) {
+        final id = list['id'] ?? list['_id'];
+        list['items'] = itemsMap[id?.toString()] ?? [];
       }
     }
 
@@ -1642,8 +1654,7 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
             const SizedBox(height: 16),
             _buildPrivacyInfoCard(
               icon: Icons.visibility_off_outlined,
-              text:
-                  'Bu kullanıcının izleme geçmişi sadece arkadaşlarına açık.',
+              text: 'Bu kullanıcının izleme geçmişi sadece arkadaşlarına açık.',
             ),
           ],
         ),

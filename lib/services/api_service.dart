@@ -10,6 +10,18 @@ class ApiService {
   // Android emülatörden localhost'a erişim için özel IP
   static const String baseUrl = 'http://10.0.2.2:8080';
 
+  /// OPTIMIZED: Ağır JSON parse işlemlerini ayrı isolate'ta yap
+  /// Büyük payload'larda (chat rooms, lists) frame budget'ı korur
+  static Future<List<Map<String, dynamic>>> parseJsonList(String body) async {
+    return compute((String jsonBody) {
+      final raw = jsonDecode(jsonBody);
+      if (raw is List) {
+        return raw.cast<Map<String, dynamic>>();
+      }
+      return <Map<String, dynamic>>[];
+    }, body);
+  }
+
   static Future<http.Response> get(String path) async {
     final token = AuthService.token;
     return http.get(
@@ -1069,8 +1081,31 @@ class ApiService {
 
   /// Aktif sohbet odalarını listeler
   static Future<List<Map<String, dynamic>>> getChatRooms() async {
+    final result = await getChatRoomsWithMeta();
+    return (result['rooms'] as List<Map<String, dynamic>>?) ?? const [];
+  }
+
+  /// Aktif sohbet odalarını metadata ile birlikte döner.
+  ///
+  /// Dönüş örneği:
+  /// {
+  ///   "ok": true/false,
+  ///   "rooms": List<Map<String,dynamic>>,
+  ///   "statusCode": int,
+  ///   "code": String?,
+  ///   "message": String?
+  /// }
+  static Future<Map<String, dynamic>> getChatRoomsWithMeta() async {
     final token = AuthService.token;
-    if (token == null || token.isEmpty) return [];
+    if (token == null || token.isEmpty) {
+      return {
+        'ok': false,
+        'rooms': <Map<String, dynamic>>[],
+        'statusCode': 401,
+        'code': 'UNAUTHORIZED',
+        'message': 'Oturum süresi doldu. Lütfen tekrar giriş yap.',
+      };
+    }
 
     try {
       final response = await http.get(
@@ -1081,13 +1116,50 @@ class ApiService {
         },
       ).timeout(const Duration(seconds: 10));
 
-      if (response.statusCode == 200) {
-        final List raw = jsonDecode(response.body);
-        return raw.cast<Map<String, dynamic>>();
+      final statusCode = response.statusCode;
+
+      if (statusCode == 200) {
+        // OPTIMIZED: JSON parsing'i isolate'a taşı
+        final rooms = await parseJsonList(response.body);
+        return {
+          'ok': true,
+          'rooms': rooms,
+          'statusCode': statusCode,
+          'code': null,
+          'message': null,
+        };
       }
-      return [];
-    } catch (_) {
-      return [];
+
+      String? code;
+      String? message;
+      try {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map<String, dynamic>) {
+          code =
+              decoded['code']?.toString() ?? decoded['errorCode']?.toString();
+          message =
+              decoded['message']?.toString() ?? decoded['error']?.toString();
+        }
+      } catch (_) {}
+
+      message ??= 'Sohbetler yüklenemedi. (HTTP $statusCode)';
+
+      return {
+        'ok': false,
+        'rooms': <Map<String, dynamic>>[],
+        'statusCode': statusCode,
+        'code': code,
+        'message': message,
+      };
+    } catch (e) {
+      return {
+        'ok': false,
+        'rooms': <Map<String, dynamic>>[],
+        'statusCode': 0,
+        'code': 'NETWORK_ERROR',
+        'message': 'Bağlantı sorunu oluştu. Lütfen tekrar dene.',
+        'detail': e.toString(),
+      };
     }
   }
 
@@ -1107,8 +1179,8 @@ class ApiService {
       ).timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
-        final List raw = jsonDecode(response.body);
-        return raw.cast<Map<String, dynamic>>();
+        // OPTIMIZED: JSON parsing'i isolate'a taşı
+        return await parseJsonList(response.body);
       }
       return [];
     } catch (_) {

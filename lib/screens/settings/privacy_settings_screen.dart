@@ -59,10 +59,9 @@ class _PrivacySettingsScreenState extends State<PrivacySettingsScreen> {
             (updated['watchingVisibility'] ?? _watchingVisibility).toString();
         _profileVisibility =
             (updated['profileVisibility'] ?? _profileVisibility).toString();
-        _searchDiscoverable =
-            updated['searchDiscoverable'] == null
-                ? _searchDiscoverable
-                : updated['searchDiscoverable'] == true;
+        _searchDiscoverable = updated['searchDiscoverable'] == null
+            ? _searchDiscoverable
+            : updated['searchDiscoverable'] == true;
       });
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -97,8 +96,7 @@ class _PrivacySettingsScreenState extends State<PrivacySettingsScreen> {
                 _buildSectionHeader('Hesap Görünürlüğü'),
                 _buildChoiceCard(
                   title: 'Aktif İzleme Durumu',
-                  subtitle:
-                      'İzlediğiniz filmi kimlerin görebileceğini seçin.',
+                  subtitle: 'İzlediğiniz filmi kimlerin görebileceğini seçin.',
                   valueText: _watchingLabel(_watchingVisibility),
                   children: [
                     _buildChoiceOption(
@@ -286,9 +284,7 @@ class _PrivacySettingsScreenState extends State<PrivacySettingsScreen> {
           child: Row(
             children: [
               Icon(
-                selected
-                    ? Icons.radio_button_checked
-                    : Icons.radio_button_off,
+                selected ? Icons.radio_button_checked : Icons.radio_button_off,
                 color: selected ? Colors.redAccent : Colors.white30,
                 size: 20,
               ),
@@ -357,7 +353,7 @@ class _PrivacySettingsScreenState extends State<PrivacySettingsScreen> {
         trailing: Switch(
           value: value,
           onChanged: onChanged,
-          activeColor: Colors.white,
+          activeThumbColor: Colors.white,
           activeTrackColor: Colors.grey[700],
           inactiveThumbColor: Colors.white70,
           inactiveTrackColor: Colors.white10,

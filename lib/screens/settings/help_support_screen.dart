@@ -42,7 +42,7 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
   }
 
   List<_HelpCategory> _buildCategories() {
-    return [
+    return const [
       _HelpCategory(
         id: 'match',
         title: 'Eşleşme Sorunları',
@@ -53,7 +53,7 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
             title: 'Eşleşme arıyorum ama kimse çıkmıyor',
             description:
                 'Movder önce aynı filmi izleyen bir kullanıcı bulmaya çalışır. Kuyrukta uygun biri yoksa eşleşme oluşmaz.',
-            steps: const [
+            steps: [
               'Önce gerçekten bir filmi veya diziyi izliyor olarak görünür durumda olduğundan emin ol.',
               'Aynı anda aynı içeriği izleyen kullanıcı yoksa eşleşme gelmeyebilir.',
               'Şehrimde Eşleşme Ara açıksa eşleşme için şehir bilgisi de aynı olmalıdır.',
@@ -64,7 +64,7 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
             title: 'Şehrimde Eşleşme Ara nasıl çalışır?',
             description:
                 'Bu modda sistem hem aynı filmi izleyen hem de profilinde aynı şehir seçili olan kullanıcıları eşleştirir.',
-            steps: const [
+            steps: [
               'Kendi profilindeki şehir bilgisinin doğru olduğundan emin ol.',
               'Karşı taraf da aynı filmi izliyor ve aynı şehirde olmalıdır.',
               'Farklı şehirdeki kullanıcılar bu modda eşleşmez.',
@@ -74,7 +74,7 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
             title: 'Eşleşme modalı açıldı ama sohbet başlamadı',
             description:
                 'Sohbetin açılması için iki tarafın da eşleşmeyi kabul etmesi gerekir.',
-            steps: const [
+            steps: [
               'Karşı tarafın kabul edip etmediğini bekle.',
               'Kabul ettiysen süre dolsa bile sistem karşı tarafın cevabını bekler.',
               'Yine de sohbet açılmıyorsa eşleşme ekranından tekrar kuyruğa gir.',
@@ -92,7 +92,7 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
             title: 'Neden mesaj gönderemiyorum?',
             description:
                 'Eşleşme iptal edilmişse veya oda artık aktif değilse sohbet yazma alanı kapanır.',
-            steps: const [
+            steps: [
               'Sohbet ekranının altında eşleşme iptaliyle ilgili bir uyarı olup olmadığını kontrol et.',
               'Eşleşme iptal edildiyse artık yeni mesaj gönderilemez.',
               'Geçici bağlantı sorunu varsa sohbetten çıkıp tekrar gir.',
@@ -102,7 +102,7 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
             title: 'Sohbeti sildim, karşı tarafın sohbeti de silinir mi?',
             description:
                 'Hayır. Sohbeti silmek sadece senin sohbetler listendeki görünürlüğü kaldırır.',
-            steps: const [
+            steps: [
               'Sola kaydırıp çöp kutusuna bastığında sohbet sadece kendi listenden gizlenir.',
               'Karşı tarafın sohbet ekranı ve geçmişi bundan etkilenmez.',
             ],
@@ -111,7 +111,7 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
             title: 'Sohbet listem neden güncellenmiyor?',
             description:
                 'Sohbet listesi yeni mesajlara ve oda durumuna göre yenilenir. Ağ veya WebSocket bağlantısı koparsa gecikme yaşanabilir.',
-            steps: const [
+            steps: [
               'Sohbetler ekranından çıkıp tekrar gir.',
               'İnternet bağlantını kontrol et.',
               'Sorun sürerse uygulamayı yeniden başlat.',
@@ -129,7 +129,7 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
             title: 'Arkadaşlık isteği nasıl gönderilir veya iptal edilir?',
             description:
                 'Arkadaşlık işlemleri sohbet ekranı üstünden yönetilir.',
-            steps: const [
+            steps: [
               'Sohbet ekranındaki Arkadaş Ekle butonuna basarak istek gönder.',
               'İstek gönderildiyse aynı alan İsteği İptal Et olarak görünür.',
               'Karşı taraf kabul veya reddet yaptığında durum anlık güncellenir.',
@@ -139,7 +139,7 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
             title: 'Bildirimler neden gelmiyor?',
             description:
                 'Bildirim ayarların kapalıysa yeni eşleşme, mesaj veya arkadaşlık isteği bildirimleri gelmeyebilir.',
-            steps: const [
+            steps: [
               'Bildirimlere İzin Ver ayarının açık olduğundan emin ol.',
               'Yeni Mesajlar, Yeni Eşleşmeler ve Arkadaşlık İstekleri seçeneklerini kontrol et.',
               'Uygulama içi ses ve titreşim ayarlarını ayrıca gözden geçir.',
@@ -151,7 +151,7 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
             title: 'Bildirimi nasıl silerim?',
             description:
                 'Bildirimler ekranında kartı sola kaydırarak çöp kutusunu açabilirsin.',
-            steps: const [
+            steps: [
               'Bildirimi sola kaydır.',
               'Sağdaki çöp kutusuna bas.',
               'Bildirim sadece senin listenden kaldırılır.',
@@ -169,7 +169,7 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
             title: 'Profilimde bazı alanlar neden görünmüyor?',
             description:
                 'Gizlilik ayarlarında profil detaylarını sadece arkadaşlara açık yaptıysan diğer kullanıcılar bu alanları göremez.',
-            steps: const [
+            steps: [
               'Gizlilik ekranındaki Profil ve Listeler ayarını kontrol et.',
               'Sadece Arkadaşlar seçiliyse profil detayların herkese açık olmaz.',
               'Aktif izleme görünürlüğü ayrı bir ayardır; onu da ayrıca değiştirebilirsin.',
@@ -181,7 +181,7 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
             title: 'Şifremi değiştiremiyorum',
             description:
                 'Yeni şifrenin kayıt ekranındaki kurallarla aynı doğrulamadan geçmesi gerekir.',
-            steps: const [
+            steps: [
               'Mevcut şifreni doğru girdiğinden emin ol.',
               'Yeni şifre en az 6 karakter olmalı.',
               'Yeni şifre en az 1 büyük harf içermeli.',
@@ -194,7 +194,7 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
             title: 'Engellenen kullanıcıları nasıl yönetirim?',
             description:
                 'Engellediğin kullanıcıları gizlilik ekranından görebilir ve engeli kaldırabilirsin.',
-            steps: const [
+            steps: [
               'Gizlilik ekranını aç.',
               'Engellenen Kullanıcılar bölümüne gir.',
               'İstersen engeli kaldır.',
@@ -214,7 +214,7 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
             title: 'Letterboxd verileri nasıl içe aktarılır?',
             description:
                 'İçe aktarma işlemi profil ekranındaki Letterboxd aksiyonu üzerinden başlatılır.',
-            steps: const [
+            steps: [
               'Profilinden Letterboxd Verilerini İçe Aktar alanını aç.',
               'ZIP veya CSV dosyanı seç.',
               'Önizlemeyi kontrol edip uygun içe aktarma seçeneğini tamamla.',
@@ -226,7 +226,7 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
             title: 'ZIP veya CSV neden yüklenemiyor?',
             description:
                 'Dosya biçimi bozuksa, içerik boşsa veya desteklenmeyen bir export yüklenirse önizleme başarısız olabilir.',
-            steps: const [
+            steps: [
               'Dosyanın gerçekten Letterboxd export dosyası olduğundan emin ol.',
               'Dosyayı yeniden dışa aktarıp tekrar dene.',
               'ZIP içindeki CSV dosyalarının eksik olmadığını kontrol et.',
@@ -236,7 +236,7 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
             title: 'Favori filmlerimi ve listelerimi nasıl düzenlerim?',
             description:
                 'Profil ekranında favori filmler ve listeler alanı düzenlenebilir.',
-            steps: const [
+            steps: [
               'Profilimi Görüntüle ekranını aç.',
               'Listeyi Düzenle alanlarını kullan.',
               'İstersen yeni liste oluşturup film ekleyebilirsin.',

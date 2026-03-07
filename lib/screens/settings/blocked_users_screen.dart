@@ -82,8 +82,8 @@ class _BlockedUsersScreenState extends State<BlockedUsersScreen> {
               : ListView.separated(
                   padding: const EdgeInsets.symmetric(vertical: 8),
                   itemCount: _blockedUsers.length,
-                  separatorBuilder: (_, __) =>
-                      Divider(color: Colors.white.withOpacity(0.05), height: 1),
+                  separatorBuilder: (_, __) => Divider(
+                      color: Colors.white.withValues(alpha: 0.05), height: 1),
                   itemBuilder: (context, index) {
                     final user = _blockedUsers[index];
                     final id = user['id'] ?? '';
@@ -156,7 +156,8 @@ class _BlockedUsersScreenState extends State<BlockedUsersScreen> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.block, size: 60, color: Colors.white.withOpacity(0.2)),
+          Icon(Icons.block,
+              size: 60, color: Colors.white.withValues(alpha: 0.2)),
           const SizedBox(height: 20),
           const Text(
             'Engellenen kimse yok',

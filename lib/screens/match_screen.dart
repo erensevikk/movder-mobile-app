@@ -1497,9 +1497,9 @@ class _MatchFoundOverlayState extends State<MatchFoundOverlay>
                           children: [
                             Container(
                               padding: const EdgeInsets.all(3),
-                              decoration: BoxDecoration(
+                              decoration: const BoxDecoration(
                                 shape: BoxShape.circle,
-                                gradient: const LinearGradient(
+                                gradient: LinearGradient(
                                   colors: [
                                     Color(0xFFE53935),
                                     Color(0xFFFF6F60)
@@ -1547,9 +1547,9 @@ class _MatchFoundOverlayState extends State<MatchFoundOverlay>
                           children: [
                             Container(
                               padding: const EdgeInsets.all(3),
-                              decoration: BoxDecoration(
+                              decoration: const BoxDecoration(
                                 shape: BoxShape.circle,
-                                gradient: const LinearGradient(
+                                gradient: LinearGradient(
                                   colors: [
                                     Color(0xFF1565C0),
                                     Color(0xFF42A5F5)

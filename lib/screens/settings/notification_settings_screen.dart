@@ -234,7 +234,7 @@ class _NotificationSettingsScreenState
                 Switch(
                   value: value,
                   onChanged: disabled ? null : onChanged,
-                  activeColor: Colors.white,
+                  activeThumbColor: Colors.white,
                   activeTrackColor: Colors.grey[700],
                   inactiveThumbColor: Colors.white70,
                   inactiveTrackColor: Colors.white10,

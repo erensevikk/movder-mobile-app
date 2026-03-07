@@ -115,33 +115,6 @@ class _ChatListScreenState extends State<ChatListScreen> {
     // Oda listede yoksa yapacak bir şey yok - tam yenileme gerekmez
   }
 
-  /// Full API refresh - sadece kullanıcı manuel yenilediğinde veya ilk yüklemede kullan
-  Future<void> _refreshChatsOnly() async {
-    final result = await ApiService.getChatRoomsWithMeta();
-    if (!mounted) return;
-
-    if (result['ok'] == true) {
-      final rooms =
-          (result['rooms'] as List<Map<String, dynamic>>?) ?? const [];
-      setState(() {
-        _chats = rooms;
-        _lastErrorMessage = null;
-        _viewState = rooms.isEmpty
-            ? _ChatListViewState.empty
-            : _ChatListViewState.content;
-      });
-      return;
-    }
-
-    setState(() {
-      _lastErrorMessage =
-          (result['message'] ?? 'Sohbetler yenilenemedi.').toString();
-      if (_chats.isEmpty) {
-        _viewState = _ChatListViewState.error;
-      }
-    });
-  }
-
   void _hideChatCard(String roomId) {
     if (roomId.isEmpty) return;
     debugPrint('[CHAT-DELETE-DBG][UI] hide local card roomId=$roomId');

@@ -19,6 +19,7 @@ class ChatService {
 
     // TODO: Update URL specifically to your backend deployment
     // Example: ws://192.168.1.100:8080 or wss://yourdomain.com
+    // ignore: todo
     final wsUrl = Uri.parse('ws://10.0.2.2:8080/ws/chat/$roomId?token=$token');
 
     try {

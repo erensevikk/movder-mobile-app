@@ -63,7 +63,8 @@ class _NotificationScreenState extends State<NotificationScreen> {
     if (notificationId.isEmpty) return;
     _hideNotificationCard(notificationId);
 
-    final response = await ApiService.delete('/api/notifications/$notificationId');
+    final response =
+        await ApiService.delete('/api/notifications/$notificationId');
     if (!mounted) return;
 
     if (response.statusCode == 200) return;
@@ -117,7 +118,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
                     padding: const EdgeInsets.symmetric(vertical: 8),
                     itemCount: _notifications.length,
                     separatorBuilder: (context, index) => Divider(
-                        color: Colors.white.withOpacity(0.05), height: 1),
+                        color: Colors.white.withValues(alpha: 0.05), height: 1),
                     itemBuilder: (context, index) {
                       final req = _notifications[index];
                       final isRead = req['isRead'] ?? false;
@@ -146,8 +147,8 @@ class _NotificationScreenState extends State<NotificationScreen> {
             Container(
               width: 140,
               height: 140,
-              decoration: BoxDecoration(
-                color: const Color(0xFF1E1E1E),
+              decoration: const BoxDecoration(
+                color: Color(0xFF1E1E1E),
                 shape: BoxShape.circle,
               ),
               child: const Center(
@@ -227,7 +228,9 @@ class _NotificationScreenState extends State<NotificationScreen> {
     }
 
     return Container(
-      color: isRead ? Colors.transparent : Colors.redAccent.withOpacity(0.05),
+      color: isRead
+          ? Colors.transparent
+          : Colors.redAccent.withValues(alpha: 0.05),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -239,7 +242,8 @@ class _NotificationScreenState extends State<NotificationScreen> {
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: const Color(0xFF1E1E1E),
-              border: Border.all(color: getColorForType().withOpacity(0.5)),
+              border:
+                  Border.all(color: getColorForType().withValues(alpha: 0.5)),
             ),
             child: ClipOval(
               child: avatarUrl != null && avatarUrl.isNotEmpty
@@ -248,7 +252,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
                       fit: BoxFit.cover,
                       placeholder: (_, __) => Icon(
                         getIconForType(),
-                        color: getColorForType().withOpacity(0.6),
+                        color: getColorForType().withValues(alpha: 0.6),
                         size: 20,
                       ),
                       errorWidget: (_, __, ___) => Icon(
@@ -367,7 +371,7 @@ class _SwipeToDeleteNotificationItemState
             Positioned.fill(
               child: Container(
                 decoration: BoxDecoration(
-                  color: Colors.redAccent.withOpacity(0.9),
+                  color: Colors.redAccent.withValues(alpha: 0.9),
                 ),
                 child: Align(
                   alignment: Alignment.centerRight,

@@ -134,8 +134,8 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                       decoration: BoxDecoration(
                         color: Colors.amber.withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(8),
-                        border:
-                            Border.all(color: Colors.amber.withValues(alpha: 0.3)),
+                        border: Border.all(
+                            color: Colors.amber.withValues(alpha: 0.3)),
                       ),
                       child: Row(
                         children: [
@@ -193,8 +193,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                   ? currentMovie.backdropUrl
                   : currentMovie.posterUrl,
               fit: BoxFit.cover,
-              placeholder: (_, __) =>
-                  Container(color: const Color(0xFF1E1E1E)),
+              placeholder: (_, __) => Container(color: const Color(0xFF1E1E1E)),
               errorWidget: (_, __, ___) =>
                   Container(color: const Color(0xFF1E1E1E)),
             ),
@@ -220,7 +219,8 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                   decoration: BoxDecoration(
                     color: Colors.black.withValues(alpha: 0.72),
                     border: Border.all(
-                        color: Colors.redAccent.withValues(alpha: 0.8), width: 1),
+                        color: Colors.redAccent.withValues(alpha: 0.8),
+                        width: 1),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Row(
@@ -388,6 +388,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           child: IconButton(
             onPressed: () {
               // TODO: İleride "Hangi listeye eklemek istersiniz?" bottom sheet'i açılacak
+              // ignore: todo
             },
             icon: const Icon(
               Icons.star_border_rounded,

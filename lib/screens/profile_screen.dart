@@ -121,15 +121,12 @@ class ProfileScreenState extends State<ProfileScreen> {
     final lists = await ApiService.getMyLists();
     if (!mounted || requestId != _loadProfileRequestSeq) return;
 
-    for (final list in lists) {
-      final name = (list['name'] ?? '').toString().toLowerCase();
-      if (!name.contains('favori')) continue;
-
+    Future<bool> trySetCoverFromList(Map<String, dynamic> list) async {
       final id = list['id'] ?? list['_id'];
-      if (id == null) break;
+      if (id == null) return false;
 
       final items = await ApiService.getListItems(id.toString());
-      if (!mounted || requestId != _loadProfileRequestSeq) return;
+      if (!mounted || requestId != _loadProfileRequestSeq) return true;
 
       for (final item in items) {
         final poster = item['posterUrl']?.toString() ?? '';
@@ -140,10 +137,27 @@ class ProfileScreenState extends State<ProfileScreen> {
               ? poster
               : 'https://image.tmdb.org/t/p/w780$poster';
         });
-        return;
+        return true;
       }
 
-      break; // Sadece favori listesini taramak yeterli
+      return false;
+    }
+
+    for (final list in lists) {
+      final name = (list['name'] ?? '').toString().toLowerCase();
+      if (!name.contains('favori')) continue;
+      final found = await trySetCoverFromList(list);
+      if (!mounted || requestId != _loadProfileRequestSeq) return;
+      if (found) return;
+      break;
+    }
+
+    for (final list in lists) {
+      final name = (list['name'] ?? '').toString().toLowerCase();
+      if (name.contains('favori')) continue;
+      final found = await trySetCoverFromList(list);
+      if (!mounted || requestId != _loadProfileRequestSeq) return;
+      if (found) return;
     }
   }
 
@@ -232,7 +246,18 @@ class ProfileScreenState extends State<ProfileScreen> {
 
     return Scaffold(
       backgroundColor: const Color(0xFF0F0F0F),
-      body: _isLoggedIn ? _buildAuthenticatedProfile() : _buildGuestProfile(),
+      body: Column(
+        children: [
+          Container(
+            height: MediaQuery.of(context).padding.top,
+            color: const Color(0xFF0F0F0F),
+          ),
+          Expanded(
+            child:
+                _isLoggedIn ? _buildAuthenticatedProfile() : _buildGuestProfile(),
+          ),
+        ],
+      ),
     );
   }
 

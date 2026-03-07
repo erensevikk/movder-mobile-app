@@ -33,6 +33,10 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
   bool _letterboxdImported = false;
   bool _isEditMode = false;
   final TextEditingController _descriptionController = TextEditingController();
+  dynamic _draftCoverBytes;
+  String? _draftCoverFileName;
+  bool _draftDeleteCover = false;
+  String _descriptionSnapshot = '';
 
   @override
   void dispose() {
@@ -43,6 +47,14 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
   bool get _canSeeProfileDetails {
     if (widget.isMe) return true;
     return _profileData?['canSeeProfileDetails'] != false;
+  }
+
+  Map<String, dynamic>? get _favoriteList {
+    for (final list in _userLists) {
+      final name = (list['name'] ?? '').toString().toLowerCase();
+      if (name.contains('favori')) return list;
+    }
+    return null;
   }
 
   @override
@@ -107,7 +119,80 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
       // Controller'a mevcut description'u ata
       final raw = (data?['description'] ?? '').toString();
       _descriptionController.text = raw;
+      _descriptionSnapshot = raw;
     }
+  }
+
+  void _enterEditMode() {
+    setState(() {
+      _isEditMode = true;
+      _descriptionSnapshot = _descriptionController.text;
+      _draftCoverBytes = null;
+      _draftCoverFileName = null;
+      _draftDeleteCover = false;
+    });
+  }
+
+  void _cancelEditMode() {
+    setState(() {
+      _isEditMode = false;
+      _descriptionController.text = _descriptionSnapshot;
+      _draftCoverBytes = null;
+      _draftCoverFileName = null;
+      _draftDeleteCover = false;
+    });
+  }
+
+  Future<void> _saveEditMode() async {
+    final newDesc = _descriptionController.text.trim();
+    final currentDesc = (_profileData?['description'] ?? '').toString();
+    final hasDescriptionChange = newDesc != currentDesc;
+    final hasCoverChange = _draftCoverBytes != null || _draftDeleteCover;
+
+    if (!hasDescriptionChange && !hasCoverChange) {
+      setState(() => _isEditMode = false);
+      return;
+    }
+
+    final res = await ApiService.updateProfile(
+      description: hasDescriptionChange ? newDesc : null,
+      coverImageBytes: _draftCoverBytes,
+      coverImageFileName: _draftCoverFileName,
+      deleteCover: _draftDeleteCover,
+    );
+    if (!mounted) return;
+
+    if (res != null && res['error'] == null) {
+      setState(() {
+        _profileData = {
+          ..._profileData ?? {},
+          'description': newDesc,
+        };
+        _coverUrl = _draftDeleteCover
+            ? ''
+            : (res['coverUrl'] ?? _coverUrl).toString();
+        _descriptionSnapshot = newDesc;
+        _draftCoverBytes = null;
+        _draftCoverFileName = null;
+        _draftDeleteCover = false;
+        _isEditMode = false;
+      });
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text((res?['error'] ?? 'Profil güncellenemedi').toString()),
+      ),
+    );
+  }
+
+  void _previewDeleteCover() {
+    setState(() {
+      _draftCoverBytes = null;
+      _draftCoverFileName = null;
+      _draftDeleteCover = _coverUrl.isNotEmpty;
+    });
   }
 
   @override
@@ -145,10 +230,12 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        // forceMaterialTransparency: AppBar'ın hit-test engelini kaldır
-        // ("kapak değiştir" butonunun üzerini kapatan görünmez katman)
-        forceMaterialTransparency: true,
         iconTheme: const IconThemeData(color: Colors.white),
+        systemOverlayStyle: const SystemUiOverlayStyle(
+          statusBarColor: Color(0xFF0F0F0F),
+          statusBarIconBrightness: Brightness.light,
+          statusBarBrightness: Brightness.dark,
+        ),
       ),
       body: CustomScrollView(
         slivers: [
@@ -176,6 +263,7 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
   Widget _buildHeader(String username) {
     const double coverHeight = 140.0;
     const double avatarSize = 90.0;
+    final topInset = MediaQuery.of(context).padding.top;
 
     final avatarUrl = _profileData?['avatarUrl']?.toString();
     final rawDescription = _profileData?['description']?.toString();
@@ -186,9 +274,20 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
         : 'Seni tanımlayan bir şeyler yaz...';
 
     // Kapak: önce kullanıcı kapak URL'si, yoksa ilk listede ilk film posteri
-    String effectiveCover = _coverUrl;
+    String effectiveCover = '';
     bool effectiveCoverIsTmdb = false;
-    if (effectiveCover.isEmpty) {
+    DecorationImage? coverDecorationImage;
+    if (_draftCoverBytes != null) {
+      coverDecorationImage = DecorationImage(
+        image: MemoryImage(_draftCoverBytes),
+        fit: BoxFit.cover,
+      );
+    } else if (!_draftDeleteCover && _coverUrl.isNotEmpty) {
+      effectiveCover = _coverUrl;
+    }
+    if (!_draftDeleteCover &&
+        coverDecorationImage == null &&
+        effectiveCover.isEmpty) {
       for (final list in _userLists) {
         final items = list['items'] as List? ?? [];
         if (items.isNotEmpty) {
@@ -209,13 +308,20 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
           clipBehavior: Clip.none,
           children: [
             // Stack boyutunu belirleyen görünmez alan
-            const SizedBox(
+            SizedBox(
               width: double.infinity,
-              height: coverHeight + (avatarSize / 2),
+              height: topInset + coverHeight + (avatarSize / 2),
+            ),
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              height: topInset,
+              child: Container(color: const Color(0xFF0F0F0F)),
             ),
             // Kapak fotoğrafı / gradient (üst kısma sabitlendi)
             Positioned(
-              top: 0,
+              top: topInset,
               left: 0,
               right: 0,
               height: coverHeight,
@@ -233,7 +339,8 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
                     ),
-                    image: effectiveCover.isNotEmpty
+                    image: coverDecorationImage ??
+                        (effectiveCover.isNotEmpty
                         ? DecorationImage(
                             image: NetworkImage(
                               effectiveCoverIsTmdb
@@ -242,7 +349,7 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
                             ),
                             fit: BoxFit.cover,
                           )
-                        : null,
+                        : null),
                   ),
                   // "Kapağı Değiştir" sadece edit modda görünür
                   child: widget.isMe && _isEditMode
@@ -275,6 +382,32 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
                 ),
               ),
             ),
+            if (widget.isMe &&
+                _isEditMode &&
+                (_coverUrl.isNotEmpty || _draftCoverBytes != null) &&
+                !_draftDeleteCover)
+              Positioned(
+                top: topInset + 12,
+                right: 16,
+                child: GestureDetector(
+                  onTap: _previewDeleteCover,
+                  child: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.black45,
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: Colors.redAccent.withValues(alpha: 0.45),
+                      ),
+                    ),
+                    child: const Icon(
+                      Icons.delete_outline_rounded,
+                      color: Colors.redAccent,
+                      size: 20,
+                    ),
+                  ),
+                ),
+              ),
             // Avatar — artık Stack sınırları İÇİNDE
             Positioned(
               left: 7,
@@ -375,49 +508,65 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
                   ),
                 ),
               ),
-              if (widget.isMe)
+              if (widget.isMe && _isEditMode) ...[
                 GestureDetector(
-                  onTap: () async {
-                    if (_isEditMode) {
-                      // Edit modu kapatılınca description'u kaydet
-                      final newDesc = _descriptionController.text.trim();
-                      final currentDesc =
-                          (_profileData?['description'] ?? '').toString();
-                      if (newDesc != currentDesc) {
-                        final res = await ApiService.updateProfile(
-                          description: newDesc,
-                        );
-                        if (!mounted) return;
-                        if (res != null && res['error'] == null) {
-                          setState(() {
-                            _profileData = {
-                              ..._profileData ?? {},
-                              'description': newDesc,
-                            };
-                          });
-                        }
-                      }
-                    }
-                    setState(() => _isEditMode = !_isEditMode);
-                  },
+                  onTap: _cancelEditMode,
                   child: Container(
                     padding:
                         const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                     decoration: BoxDecoration(
-                      color: _isEditMode
-                          ? Colors.redAccent.withValues(alpha: 0.15)
-                          : const Color(0xFF222222),
+                      color: const Color(0xFF222222),
                       borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                        color: _isEditMode
-                            ? Colors.redAccent.withValues(alpha: 0.5)
-                            : Colors.white12,
+                      border: Border.all(color: Colors.white12),
+                    ),
+                    child: const Text(
+                      'Vazgeç',
+                      style: TextStyle(
+                        color: Colors.white54,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
-                    child: Text(
-                      _isEditMode ? 'Kaydet' : 'Profili Düzenle',
+                  ),
+                ),
+                const SizedBox(width: 8),
+                GestureDetector(
+                  onTap: _saveEditMode,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.redAccent.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: Colors.redAccent.withValues(alpha: 0.5),
+                      ),
+                    ),
+                    child: const Text(
+                      'Kaydet',
                       style: TextStyle(
-                        color: _isEditMode ? Colors.redAccent : Colors.white54,
+                        color: Colors.redAccent,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+              ] else if (widget.isMe)
+                GestureDetector(
+                  onTap: _enterEditMode,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF222222),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: Colors.white12),
+                    ),
+                    child: const Text(
+                      'Profili Düzenle',
+                      style: TextStyle(
+                        color: Colors.white54,
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
                       ),
@@ -609,24 +758,11 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
 
     if (pickedFile != null && mounted) {
       final bytes = await pickedFile.readAsBytes();
-      final res = await ApiService.updateProfile(
-        coverImageBytes: bytes,
-        coverImageFileName: pickedFile.name,
-      );
-      if (!mounted) return;
-      if (res != null && res['error'] == null) {
-        setState(() {
-          _coverUrl = (res['coverUrl'] ?? _coverUrl).toString();
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Kapak fotoğrafı güncellendi ✓')),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-              content: Text((res?['error'] ?? 'Kapak yüklenemedi').toString())),
-        );
-      }
+      setState(() {
+        _draftCoverBytes = bytes;
+        _draftCoverFileName = pickedFile.name;
+        _draftDeleteCover = false;
+      });
     }
   }
 
@@ -671,7 +807,7 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'FAVORI FILMLER',
+              'FAVORi FİLMLER',
               style: TextStyle(
                 color: Colors.white54,
                 fontSize: 13,
@@ -690,11 +826,9 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
       );
     }
 
-    // Kullanıcının listelerden herhangi birinde film var mı?
-    final hasContent = _userLists.any((list) {
-      final items = list['items'] as List? ?? [];
-      return items.isNotEmpty;
-    });
+    final favoriteList = _favoriteList;
+    final favoriteItems = (favoriteList?['items'] as List?) ?? const [];
+    final hasContent = favoriteItems.isNotEmpty;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 48, 20, 20),
@@ -732,25 +866,15 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
                             color: Colors.white70, size: 14),
                       ),
                     ),
-                    if (_userLists.isNotEmpty) ...[
+                    if (favoriteList != null) ...[
                       const SizedBox(width: 8),
                       GestureDetector(
                         onTap: () {
-                          // Favori listeyi bulmaya çalış, yoksa ilk listeyi aç
-                          final targetList = _userLists.firstWhere(
-                            (l) =>
-                                l['name']
-                                    ?.toString()
-                                    .toLowerCase()
-                                    .contains('favori') ??
-                                false,
-                            orElse: () => _userLists.first,
-                          );
                           Navigator.push(
                             context,
                             MaterialPageRoute(
                               builder: (_) => ListDetailScreen(
-                                listData: targetList,
+                                listData: favoriteList,
                                 isMe: widget.isMe,
                               ),
                             ),
@@ -799,11 +923,7 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
               ),
             )
           else ...[
-            // Tüm listelerdeki filmleri topla (ilk 4 tane)
-            _buildFavoritesGrid(_userLists
-                .expand((list) => (list['items'] as List? ?? []))
-                .take(4)
-                .toList()),
+            _buildFavoritesGrid(favoriteItems.take(4).toList()),
           ],
         ],
       ),
@@ -960,8 +1080,13 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
-      children: _userLists.map((userList) {
+      children: _userLists.where((userList) {
+        final listName = (userList['name'] ?? '').toString().toLowerCase();
+        return !listName.contains('favori');
+      }).map((userList) {
         final listName = userList['name'] ?? 'İsimsiz Liste';
+        final isFavoriteList =
+            listName.toString().toLowerCase().contains('favori');
         final items = (userList['items'] as List?) ?? [];
 
         return Padding(
@@ -1010,24 +1135,68 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
               ),
               const SizedBox(height: 16),
               if (items.isEmpty)
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(24),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1E1E1E),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.white10),
-                  ),
-                  child: const Column(
-                    children: [
-                      Icon(Icons.movie_filter_outlined,
-                          color: Colors.white24, size: 48),
-                      SizedBox(height: 12),
-                      Text(
-                        'Bu listeye henüz film eklemedin',
-                        style: TextStyle(color: Colors.white54),
+                SizedBox(
+                  height: 140,
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(24),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1E1E1E),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.white10),
+                    ),
+                    child: Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (widget.isMe && isFavoriteList) ...[
+                            SizedBox(
+                              width: double.infinity,
+                              child: OutlinedButton(
+                                onPressed: () {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => ListDetailScreen(
+                                        listData: userList,
+                                        isMe: widget.isMe,
+                                      ),
+                                    ),
+                                  ).then((_) => _fetchProfile());
+                                },
+                                style: OutlinedButton.styleFrom(
+                                  side: const BorderSide(color: Colors.white12),
+                                  backgroundColor: const Color(0xFF232323),
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 14),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                ),
+                                child: const Text(
+                                  'Favori Filmlerini Ekle',
+                                  style: TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ] else ...[
+                            const Icon(Icons.movie_filter_outlined,
+                                color: Colors.white24, size: 48),
+                            const SizedBox(height: 12),
+                            Text(
+                              widget.isMe
+                                  ? 'Bu listeye henüz film eklemedin'
+                                  : 'Bu listede henüz film yok',
+                              style: const TextStyle(color: Colors.white54),
+                            ),
+                          ],
+                        ],
                       ),
-                    ],
+                    ),
                   ),
                 )
               else
@@ -1643,7 +1812,7 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'IZLEME GECMISI',
+              'İZLEME GEÇMİŞİ',
               style: TextStyle(
                 color: Colors.white54,
                 fontSize: 13,

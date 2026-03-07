@@ -3,7 +3,6 @@ import '../../services/auth_service.dart';
 import '../../services/api_service.dart';
 import '../../main.dart';
 import 'settings/account_info_screen.dart';
-import 'settings/privacy_settings_screen.dart';
 import 'settings/change_password_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
@@ -80,14 +79,6 @@ class SettingsScreen extends StatelessWidget {
                 context,
                 MaterialPageRoute(
                     builder: (_) => const ChangePasswordScreen())),
-          ),
-          _buildListItem(
-            icon: Icons.privacy_tip_outlined,
-            title: 'Gizlilik',
-            onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                    builder: (_) => const PrivacySettingsScreen())),
           ),
           _buildListItem(
             icon: Icons.delete_forever,

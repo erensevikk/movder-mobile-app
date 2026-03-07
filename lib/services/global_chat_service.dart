@@ -41,6 +41,27 @@ class GlobalChatService {
   final StreamController<String> _messageEventsController =
       StreamController<String>.broadcast();
 
+  String _resolveRoomUsername(Map<String, dynamic> room) {
+    const fallback = 'Kullanıcı';
+    final candidates = [
+      room['username'],
+      room['targetUsername'],
+      room['otherUsername'],
+      room['matchedUsername'],
+      room['displayName'],
+      (room['targetUser'] is Map ? room['targetUser']['username'] : null),
+      (room['otherUser'] is Map ? room['otherUser']['username'] : null),
+      (room['user'] is Map ? room['user']['username'] : null),
+    ];
+
+    for (final candidate in candidates) {
+      final value = candidate?.toString().trim() ?? '';
+      if (value.isNotEmpty) return value;
+    }
+
+    return fallback;
+  }
+
   // ─── API ───────────────────────────────────────────────────
 
   /// Tüm sohbet odalarını getirip WebSocket bağlantılarını başlatır.
@@ -70,7 +91,7 @@ class GlobalChatService {
       if (_channels.containsKey(roomId)) continue;
 
       _roomMeta[roomId] = _RoomMeta(
-        username: (room['username'] ?? 'Kullanıcı').toString(),
+        username: _resolveRoomUsername(room),
         avatarUrl: room['avatarUrl']?.toString(),
       );
 

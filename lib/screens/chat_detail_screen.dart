@@ -60,6 +60,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   int _friendStatusWsVersion = 0;
   final GlobalKey _friendsMenuAnchorKey = GlobalKey();
   double? _friendsMenuWidth;
+  late String _resolvedUsername;
 
   // ── Hızlı Mesajlar (ilk mesaj için) ──────────────────────
   static const List<String> _quickMessages = [
@@ -74,12 +75,15 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   @override
   void initState() {
     super.initState();
+    _resolvedUsername =
+        widget.username.trim().isEmpty ? 'Bilinmeyen' : widget.username.trim();
     _messages = List<Map<String, dynamic>>.from(widget.initialMessages);
     _isUnmatched = widget.isUnmatched;
     _loadMyUserId();
     _loadFriendStatus(trigger: 'init');
     _startFriendStatusPolling();
     _setupWebSocket();
+    _resolveUsernameFromProfile();
     // Bu odaya girdiğimizde global dinleyiciye haber ver
     // Böylece aynı odadan gelen mesajlar bildirim balonu olarak gösterilmez
     if (widget.roomId != null) {
@@ -113,6 +117,22 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         }
       });
     }
+  }
+
+  Future<void> _resolveUsernameFromProfile() async {
+    if (_resolvedUsername != 'Bilinmeyen') return;
+    final targetUserId = widget.targetUserId?.trim() ?? '';
+    if (targetUserId.isEmpty) return;
+
+    final profile = await ApiService.getUserProfile(targetUserId);
+    if (!mounted) return;
+
+    final username = (profile?['username'] ?? '').toString().trim();
+    if (username.isEmpty) return;
+
+    setState(() {
+      _resolvedUsername = username;
+    });
   }
 
   Future<void> _loadMessages() async {
@@ -668,7 +688,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         title:
             const Text('Arkadaşı Sil', style: TextStyle(color: Colors.white)),
         content: Text(
-          '${widget.username} adlı kullanıcıyı arkadaş listesinden kaldırmak istiyor musun?',
+          '$_resolvedUsername adlı kullanıcıyı arkadaş listesinden kaldırmak istiyor musun?',
           style: const TextStyle(color: Colors.white70),
         ),
         actions: [
@@ -883,7 +903,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  widget.username,
+                  _resolvedUsername,
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 16,
@@ -1225,32 +1245,76 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
 
   // ── FİLM EŞLEŞME BANDI ───────────────────────────────────
   Widget _buildMovieBanner() {
+    final rawPoster = widget.moviePoster?.trim() ?? '';
+    final bannerPoster = rawPoster.isEmpty
+        ? ''
+        : (rawPoster.startsWith('http')
+            ? rawPoster
+            : '${ApiService.baseUrl}$rawPoster');
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            Colors.redAccent.withValues(alpha: 0.08),
-            Colors.transparent,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: bannerPoster.isNotEmpty
+                  ? Opacity(
+                      opacity: 0.18,
+                      child: CachedNetworkImage(
+                        imageUrl: bannerPoster,
+                        fit: BoxFit.cover,
+                        errorWidget: (_, __, ___) =>
+                            Container(color: const Color(0xFF121212)),
+                      ),
+                    )
+                  : Container(color: const Color(0xFF121212)),
+            ),
+            Positioned.fill(
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.centerLeft,
+                    end: Alignment.centerRight,
+                    colors: [
+                      const Color(0xFF121212).withValues(alpha: 0.94),
+                      const Color(0xFF121212).withValues(alpha: 0.82),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.link_rounded,
+                    size: 14,
+                    color: Colors.redAccent.withValues(alpha: 0.75),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '${widget.movieTitle} izlerken eşleştiniz',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white60,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.link_rounded, size: 14, color: Colors.white24),
-          const SizedBox(width: 8),
-          Text(
-            '${widget.movieTitle} izlerken eşleştiniz',
-            style: const TextStyle(
-              color: Colors.white38,
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -1482,7 +1546,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
               child: Text(
                 _unmatchedByMe
                     ? 'Eşleşmeyi iptal ettiniz. Artık mesaj gönderemezsiniz.'
-                    : '${widget.username} eşleşmeyi iptal etti. Artık mesaj gönderemezsiniz.',
+                    : '$_resolvedUsername eşleşmeyi iptal etti. Artık mesaj gönderemezsiniz.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: Colors.white.withValues(alpha: 0.35),

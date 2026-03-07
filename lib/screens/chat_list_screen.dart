@@ -35,6 +35,69 @@ class _ChatListScreenState extends State<ChatListScreen> {
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
 
+  String _resolveChatUsername(Map<String, dynamic> chat) {
+    const fallback = 'Bilinmeyen';
+    final candidates = [
+      chat['username'],
+      chat['targetUsername'],
+      chat['otherUsername'],
+      chat['matchedUsername'],
+      chat['displayName'],
+      (chat['targetUser'] is Map ? chat['targetUser']['username'] : null),
+      (chat['otherUser'] is Map ? chat['otherUser']['username'] : null),
+      (chat['user'] is Map ? chat['user']['username'] : null),
+    ];
+
+    for (final candidate in candidates) {
+      final value = candidate?.toString().trim() ?? '';
+      if (value.isNotEmpty) return value;
+    }
+
+    return fallback;
+  }
+
+  String? _resolveTargetUserId(Map<String, dynamic> chat) {
+    final candidates = [
+      chat['targetUserId'],
+      chat['otherUserId'],
+      chat['matchedUserId'],
+      (chat['targetUser'] is Map ? chat['targetUser']['id'] : null),
+      (chat['targetUser'] is Map ? chat['targetUser']['_id'] : null),
+      (chat['otherUser'] is Map ? chat['otherUser']['id'] : null),
+      (chat['otherUser'] is Map ? chat['otherUser']['_id'] : null),
+      (chat['user'] is Map ? chat['user']['id'] : null),
+      (chat['user'] is Map ? chat['user']['_id'] : null),
+    ];
+
+    for (final candidate in candidates) {
+      final value = candidate?.toString().trim() ?? '';
+      if (value.isNotEmpty) return value;
+    }
+
+    return null;
+  }
+
+  Future<List<Map<String, dynamic>>> _enrichChatsWithUsernames(
+      List<Map<String, dynamic>> rooms) async {
+    final enriched = rooms.map(Map<String, dynamic>.from).toList();
+
+    for (final room in enriched) {
+      if (_resolveChatUsername(room) != 'Bilinmeyen') continue;
+
+      final targetUserId = _resolveTargetUserId(room);
+      if (targetUserId == null) continue;
+
+      final profile = await ApiService.getUserProfile(targetUserId);
+      final username = (profile?['username'] ?? '').toString().trim();
+      if (username.isEmpty) continue;
+
+      room['username'] = username;
+      room['targetUserId'] = room['targetUserId'] ?? targetUserId;
+    }
+
+    return enriched;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -61,10 +124,13 @@ class _ChatListScreenState extends State<ChatListScreen> {
 
     final bool ok = result['ok'] == true;
     final String? errorMessage = result['message']?.toString();
-    final List<Map<String, dynamic>> rooms =
+    final List<Map<String, dynamic>> rawRooms =
         (result['rooms'] as List<Map<String, dynamic>>?) ?? const [];
 
     if (ok) {
+      final rooms = await _enrichChatsWithUsernames(rawRooms);
+      if (!mounted) return;
+
       setState(() {
         _chats = rooms;
         _lastErrorMessage = null;
@@ -187,7 +253,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
     if (_isSearching && _searchQuery.trim().isNotEmpty) {
       final queryLower = _searchQuery.trim().toLowerCase();
       displayedChats = _chats.where((c) {
-        final username = (c['username']?.toString() ?? '').toLowerCase();
+        final username = _resolveChatUsername(c).toLowerCase();
         return username.contains(queryLower);
       }).toList();
     }
@@ -195,9 +261,14 @@ class _ChatListScreenState extends State<ChatListScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFF0F0F0F),
       body: SafeArea(
+        top: false,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Container(
+              height: MediaQuery.of(context).padding.top,
+              color: const Color(0xFF0F0F0F),
+            ),
             // ── Başlık Alanı ──────────────────────────────────
             Padding(
               padding:
@@ -492,12 +563,13 @@ class _ChatListScreenState extends State<ChatListScreen> {
                           : '${ApiService.baseUrl}/$avatarRaw'));
 
               final roomId = (chat['roomId'] ?? '').toString();
+              final username = _resolveChatUsername(chat);
 
               return _SwipeToDeleteChatItem(
                 key: ValueKey('chat-swipe-$roomId-$index'),
                 onDelete: () => _deleteChatForMe(roomId),
                 child: _ChatCard(
-                  username: chat['username']?.toString() ?? 'Bilinmeyen',
+                  username: username,
                   avatarUrl: avatarUrl,
                   isOnline: true,
                   movieTitle:
@@ -515,9 +587,9 @@ class _ChatListScreenState extends State<ChatListScreen> {
                         .push(
                       MaterialPageRoute(
                         builder: (_) => ChatDetailScreen(
-                          targetUserId: chat['targetUserId']?.toString(),
+                          targetUserId: _resolveTargetUserId(chat),
                           roomId: roomId,
-                          username: chat['username']?.toString() ?? '',
+                          username: username,
                           avatarSeed: chat['avatarSeed']?.toString() ?? '',
                           avatarUrl: avatarUrl,
                           isOnline: true,

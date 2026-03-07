@@ -543,6 +543,15 @@ class MatchScreenState extends State<MatchScreen>
         fit: StackFit.expand,
         children: [
           _buildBackground(),
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            height: MediaQuery.of(context).padding.top,
+            child: Container(
+              color: const Color(0xFF0F0F0F),
+            ),
+          ),
           Container(
             decoration: BoxDecoration(
               gradient: LinearGradient(

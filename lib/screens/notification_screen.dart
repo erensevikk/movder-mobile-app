@@ -104,6 +104,15 @@ class _NotificationScreenState extends State<NotificationScreen> {
             style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
         backgroundColor: const Color(0xFF1A1A1A),
         elevation: 0,
+        flexibleSpace: Column(
+          children: [
+            Container(
+              height: MediaQuery.of(context).padding.top,
+              color: const Color(0xFF0F0F0F),
+            ),
+            const Expanded(child: SizedBox.expand()),
+          ],
+        ),
       ),
       body: _isLoading
           ? const Center(
@@ -228,9 +237,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
     }
 
     return Container(
-      color: isRead
-          ? Colors.transparent
-          : Colors.redAccent.withValues(alpha: 0.05),
+      color: const Color(0xFF0F0F0F),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -371,7 +378,9 @@ class _SwipeToDeleteNotificationItemState
             Positioned.fill(
               child: Container(
                 decoration: BoxDecoration(
-                  color: Colors.redAccent.withValues(alpha: 0.9),
+                  color: _offsetX == 0
+                      ? Colors.transparent
+                      : Colors.redAccent.withValues(alpha: 0.9),
                 ),
                 child: Align(
                   alignment: Alignment.centerRight,

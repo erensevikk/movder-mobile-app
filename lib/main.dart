@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
@@ -16,6 +17,13 @@ import 'screens/notification_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      statusBarColor: Color(0xFF0F0F0F),
+      statusBarIconBrightness: Brightness.light,
+      statusBarBrightness: Brightness.dark,
+    ),
+  );
   await AuthService.init();
   runApp(const MovderApp());
 }
@@ -28,6 +36,14 @@ class MovderApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Movder',
+      builder: (context, child) => AnnotatedRegion<SystemUiOverlayStyle>(
+        value: const SystemUiOverlayStyle(
+          statusBarColor: Color(0xFF0F0F0F),
+          statusBarIconBrightness: Brightness.light,
+          statusBarBrightness: Brightness.dark,
+        ),
+        child: child ?? const SizedBox.shrink(),
+      ),
       theme: ThemeData(
         brightness: Brightness.dark,
         scaffoldBackgroundColor: const Color(0xFF0F0F0F),
@@ -64,6 +80,13 @@ class MovderApp extends StatelessWidget {
         splashFactory: NoSplash.splashFactory,
         splashColor: Colors.transparent,
         highlightColor: Colors.transparent,
+        appBarTheme: const AppBarTheme(
+          systemOverlayStyle: SystemUiOverlayStyle(
+            statusBarColor: Color(0xFF0F0F0F),
+            statusBarIconBrightness: Brightness.light,
+            statusBarBrightness: Brightness.dark,
+          ),
+        ),
       ),
       home: const MainNavigatorScreen(),
     );
@@ -101,6 +124,13 @@ class _MainNavigatorScreenState extends State<MainNavigatorScreen>
   @override
   void initState() {
     super.initState();
+    SystemChrome.setSystemUIOverlayStyle(
+      const SystemUiOverlayStyle(
+        statusBarColor: Color(0xFF0F0F0F),
+        statusBarIconBrightness: Brightness.light,
+        statusBarBrightness: Brightness.dark,
+      ),
+    );
     WidgetsBinding.instance.addObserver(this);
     // Overlay bir sonraki frame'de hazır olur
     WidgetsBinding.instance.addPostFrameCallback((_) => _initServices());
@@ -130,7 +160,13 @@ class _MainNavigatorScreenState extends State<MainNavigatorScreen>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: const SystemUiOverlayStyle(
+        statusBarColor: Color(0xFF0F0F0F),
+        statusBarIconBrightness: Brightness.light,
+        statusBarBrightness: Brightness.dark,
+      ),
+      child: Scaffold(
       body: IndexedStack(
         index: _currentIndex,
         children: _pages,
@@ -185,6 +221,7 @@ class _MainNavigatorScreenState extends State<MainNavigatorScreen>
             label: "Hesabım",
           ),
         ],
+      ),
       ),
     );
   }
@@ -1153,6 +1190,15 @@ class _MovieRadarScreenState extends State<MovieRadarScreen> {
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
+        flexibleSpace: Column(
+          children: [
+            Container(
+              height: MediaQuery.of(context).padding.top,
+              color: const Color(0xFF0F0F0F),
+            ),
+            const Expanded(child: SizedBox.expand()),
+          ],
+        ),
         title: Container(
           height: 45,
           decoration: BoxDecoration(

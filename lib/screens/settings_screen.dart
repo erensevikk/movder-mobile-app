@@ -9,15 +9,6 @@ import 'settings/change_password_screen.dart';
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
 
-  void _logout(BuildContext context) async {
-    await AuthService.clearToken();
-    if (!context.mounted) return;
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (context) => const MainNavigatorScreen()),
-      (route) => false,
-    );
-  }
-
   void _showDeleteAccountDialog(BuildContext context) {
     showDialog(
       context: context,
@@ -51,6 +42,7 @@ class SettingsScreen extends StatelessWidget {
 
     if (response.statusCode == 200) {
       await AuthService.clearToken();
+      if (!context.mounted) return;
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (context) => const MainNavigatorScreen()),
         (route) => false,
@@ -92,8 +84,10 @@ class SettingsScreen extends StatelessWidget {
           _buildListItem(
             icon: Icons.privacy_tip_outlined,
             title: 'Gizlilik',
-            onTap: () => Navigator.push(context,
-                MaterialPageRoute(builder: (_) => const PrivacySettingsScreen())),
+            onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const PrivacySettingsScreen())),
           ),
           _buildListItem(
             icon: Icons.delete_forever,

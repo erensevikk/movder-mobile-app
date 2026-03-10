@@ -42,7 +42,7 @@ func AuthMiddleware() gin.HandlerFunc {
 		})
 
 		if err != nil || !token.Valid {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Geçersiz veya süresi dolmuş token!"})
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Geçersiz veya süresi dolmuş oturum!"})
 			c.Abort()
 			return
 		}

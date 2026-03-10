@@ -217,7 +217,8 @@ class _BubbleContent extends StatelessWidget {
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 color: const Color(0xFF2A2A2A),
-                border: Border.all(color: Colors.redAccent.withValues(alpha: 0.5)),
+                border:
+                    Border.all(color: Colors.redAccent.withValues(alpha: 0.5)),
                 image: notif.avatarUrl != null && notif.avatarUrl!.isNotEmpty
                     ? DecorationImage(
                         image: NetworkImage(notif.avatarUrl!),

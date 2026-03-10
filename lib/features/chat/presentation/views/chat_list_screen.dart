@@ -1,263 +1,28 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:intl/intl.dart';
-import '../services/api_service.dart';
-import '../services/global_chat_service.dart';
-import 'chat_detail_screen.dart';
+import '../../../../core/mixins/view_effect_listener_mixin.dart';
+import '../../../../core/mixins/view_model_binding_mixin.dart';
+import '../../data/services/chat_repository_impl.dart';
+import '../view_models/chat_list_view_model.dart';
 
 class ChatListScreen extends StatefulWidget {
-  final int refreshSignal;
-
-  const ChatListScreen({super.key, this.refreshSignal = 0});
+  const ChatListScreen({super.key});
 
   @override
-  State<ChatListScreen> createState() => _ChatListScreenState();
+  State<ChatListScreen> createState() => ChatListScreenState();
 }
 
-enum _ChatListViewState {
-  initialLoading,
-  content,
-  empty,
-  error,
-}
-
-class _ChatListScreenState extends State<ChatListScreen> {
-  List<Map<String, dynamic>> _chats = [];
-  _ChatListViewState _viewState = _ChatListViewState.initialLoading;
-  bool _isRefreshing = false;
-  String? _lastErrorMessage;
-  StreamSubscription<String>? _messageEventsSub;
-  Timer? _refreshDebounce;
-
-  bool _isSearching = false;
-  String _searchQuery = '';
-  final TextEditingController _searchController = TextEditingController();
-
-  String _resolveChatUsername(Map<String, dynamic> chat) {
-    const fallback = 'Bilinmeyen';
-    final candidates = [
-      chat['username'],
-      chat['targetUsername'],
-      chat['otherUsername'],
-      chat['matchedUsername'],
-      chat['displayName'],
-      (chat['targetUser'] is Map ? chat['targetUser']['username'] : null),
-      (chat['otherUser'] is Map ? chat['otherUser']['username'] : null),
-      (chat['user'] is Map ? chat['user']['username'] : null),
-    ];
-
-    for (final candidate in candidates) {
-      final value = candidate?.toString().trim() ?? '';
-      if (value.isNotEmpty) return value;
-    }
-
-    return fallback;
-  }
-
-  String? _resolveTargetUserId(Map<String, dynamic> chat) {
-    final candidates = [
-      chat['targetUserId'],
-      chat['otherUserId'],
-      chat['matchedUserId'],
-      (chat['targetUser'] is Map ? chat['targetUser']['id'] : null),
-      (chat['targetUser'] is Map ? chat['targetUser']['_id'] : null),
-      (chat['otherUser'] is Map ? chat['otherUser']['id'] : null),
-      (chat['otherUser'] is Map ? chat['otherUser']['_id'] : null),
-      (chat['user'] is Map ? chat['user']['id'] : null),
-      (chat['user'] is Map ? chat['user']['_id'] : null),
-    ];
-
-    for (final candidate in candidates) {
-      final value = candidate?.toString().trim() ?? '';
-      if (value.isNotEmpty) return value;
-    }
-
-    return null;
-  }
-
-  Future<List<Map<String, dynamic>>> _enrichChatsWithUsernames(
-      List<Map<String, dynamic>> rooms) async {
-    final enriched = rooms.map(Map<String, dynamic>.from).toList();
-
-    for (final room in enriched) {
-      if (_resolveChatUsername(room) != 'Bilinmeyen') continue;
-
-      final targetUserId = _resolveTargetUserId(room);
-      if (targetUserId == null) continue;
-
-      final profile = await ApiService.getUserProfile(targetUserId);
-      final username = (profile?['username'] ?? '').toString().trim();
-      if (username.isEmpty) continue;
-
-      room['username'] = username;
-      room['targetUserId'] = room['targetUserId'] ?? targetUserId;
-    }
-
-    return enriched;
-  }
+class ChatListScreenState extends State<ChatListScreen>
+    with
+        ViewModelBindingMixin<ChatListScreen, ChatListViewModel>,
+        ViewEffectListenerMixin<ChatListScreen, ChatListViewModel> {
+  @override
+  ChatListViewModel createViewModel() => ChatListViewModel(
+        repository: const ChatRepositoryImpl(),
+      );
 
   @override
-  void initState() {
-    super.initState();
-    GlobalChatService.instance.setChatListVisible(true);
-    _loadChats();
-
-    _messageEventsSub =
-        GlobalChatService.instance.messageEvents.listen((roomId) {
-      // İncremental update: Sadece ilgili odayı güncelle, API çağrısı yapma
-      _updateChatRoomLocally(roomId);
-    });
-  }
-
-  Future<void> _loadChats(
-      {bool rebindGlobalWs = true, bool isRefresh = false}) async {
-    if (isRefresh) {
-      setState(() => _isRefreshing = true);
-    } else {
-      setState(() => _viewState = _ChatListViewState.initialLoading);
-    }
-
-    final result = await ApiService.getChatRoomsWithMeta();
-    if (!mounted) return;
-
-    final bool ok = result['ok'] == true;
-    final String? errorMessage = result['message']?.toString();
-    final List<Map<String, dynamic>> rawRooms =
-        (result['rooms'] as List<Map<String, dynamic>>?) ?? const [];
-
-    if (ok) {
-      final rooms = await _enrichChatsWithUsernames(rawRooms);
-      if (!mounted) return;
-
-      setState(() {
-        _chats = rooms;
-        _lastErrorMessage = null;
-        _viewState = rooms.isEmpty
-            ? _ChatListViewState.empty
-            : _ChatListViewState.content;
-        _isRefreshing = false;
-      });
-
-      // Global WS bağlantılarını sadece gerektiğinde re-init et.
-      // (Her yeni mesaj eventinde re-init etmek socket churn üretir.)
-      if (rebindGlobalWs) {
-        await GlobalChatService.instance.init(rooms);
-      }
-      return;
-    }
-
-    setState(() {
-      _lastErrorMessage = errorMessage?.isNotEmpty == true
-          ? errorMessage
-          : 'Sohbetler yüklenemedi.';
-      _viewState = _chats.isEmpty
-          ? _ChatListViewState.error
-          : _ChatListViewState.content;
-      _isRefreshing = false;
-    });
-  }
-
-  /// İncremental update: Sadece ilgili odayı güncelle, full API çağrısı yok
-  /// Bu fonksiyon yeni mesaj event'lerinde çağrılır
-  void _updateChatRoomLocally(String roomId) {
-    // Odayı bul ve en üste taşı (yeni mesaj var olarak işaretle)
-    final existingIndex = _chats.indexWhere((chat) => chat['roomId'] == roomId);
-    if (existingIndex > 0) {
-      // Odayı en üste taşı
-      setState(() {
-        final chat = Map<String, dynamic>.from(_chats.removeAt(existingIndex));
-        chat['lastTimestamp'] = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-        _chats.insert(0, chat);
-      });
-    } else if (existingIndex == 0) {
-      // Zaten en üstte, sadece zamanı güncelle
-      setState(() {
-        _chats[0]['lastTimestamp'] =
-            DateTime.now().millisecondsSinceEpoch ~/ 1000;
-      });
-    }
-    // Oda listede yoksa yapacak bir şey yok - tam yenileme gerekmez
-  }
-
-  void _hideChatCard(String roomId) {
-    if (roomId.isEmpty) return;
-    debugPrint('[CHAT-DELETE-DBG][UI] hide local card roomId=$roomId');
-    setState(() {
-      _chats.removeWhere((c) => (c['roomId'] ?? '').toString() == roomId);
-    });
-  }
-
-  Future<void> _deleteChatForMe(String roomId) async {
-    if (roomId.isEmpty) return;
-    debugPrint('[CHAT-DELETE-DBG][UI] delete requested roomId=$roomId');
-    _hideChatCard(roomId); // Kullanıcı aksiyonunda kartı anında kaldır.
-    // Global WS tarafında da bu odayı dinlemek gereksiz hâle geldi.
-    GlobalChatService.instance.removeRoom(roomId);
-
-    final success = await ApiService.hideChatRoom(roomId);
-    debugPrint(
-        '[CHAT-DELETE-DBG][UI] delete result roomId=$roomId success=$success');
-    if (!mounted) return;
-
-    if (success) return;
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text(
-          'Sohbet sunucuda silinemedi, ama bu ekranda gizlendi.',
-        ),
-        backgroundColor: Colors.orangeAccent,
-      ),
-    );
-  }
-
-  @override
-  void didUpdateWidget(covariant ChatListScreen oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.refreshSignal != widget.refreshSignal) {
-      _loadChats(rebindGlobalWs: true);
-    }
-  }
-
-  @override
-  void dispose() {
-    GlobalChatService.instance.setChatListVisible(false);
-    _refreshDebounce?.cancel();
-    _messageEventsSub?.cancel();
-    _searchController.dispose();
-    super.dispose();
-  }
-
-  String _formatTime(int? timestamp) {
-    if (timestamp == null || timestamp == 0) return '';
-    final date = DateTime.fromMillisecondsSinceEpoch(timestamp * 1000);
-    final now = DateTime.now();
-    final isToday =
-        now.year == date.year && now.month == date.month && now.day == date.day;
-    if (isToday) {
-      return DateFormat('HH:mm').format(date);
-    }
-    return DateFormat('dd.MM.yyyy').format(date);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    int totalUnread = 0;
-    for (var c in _chats) {
-      totalUnread += (c['unreadCount'] as int? ?? 0);
-    }
-
-    List<Map<String, dynamic>> displayedChats = _chats;
-    if (_isSearching && _searchQuery.trim().isNotEmpty) {
-      final queryLower = _searchQuery.trim().toLowerCase();
-      displayedChats = _chats.where((c) {
-        final username = _resolveChatUsername(c).toLowerCase();
-        return username.contains(queryLower);
-      }).toList();
-    }
-
+  Widget buildWithViewModel(BuildContext context, ChatListViewModel vm) {
     return Scaffold(
       backgroundColor: const Color(0xFF0F0F0F),
       body: SafeArea(
@@ -270,93 +35,10 @@ class _ChatListScreenState extends State<ChatListScreen> {
               color: const Color(0xFF0F0F0F),
             ),
             // ── Başlık Alanı ──────────────────────────────────
-            Padding(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 20.0, vertical: 20.0),
-              child: Row(
-                children: [
-                  // Sol: Başlık + alt açıklama veya Arama Inputu
-                  Expanded(
-                    child: _isSearching
-                        ? TextField(
-                            controller: _searchController,
-                            autofocus: true,
-                            style: const TextStyle(
-                                color: Colors.white, fontSize: 16),
-                            onChanged: (val) {
-                              setState(() {
-                                _searchQuery = val;
-                              });
-                            },
-                            decoration: const InputDecoration(
-                              hintText: 'Sohbetlerde ara...',
-                              hintStyle: TextStyle(color: Colors.white38),
-                              border: InputBorder.none,
-                            ),
-                          )
-                        : Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Sohbetler',
-                                style:
-                                    Theme.of(context).textTheme.headlineLarge,
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                'Eşleşmelerinden gelen mesajlar',
-                                style: Theme.of(context)
-                                        .textTheme
-                                        .bodySmall
-                                        ?.copyWith(
-                                          color: Colors.white60,
-                                          fontWeight: FontWeight.w500,
-                                        ) ??
-                                    const TextStyle(
-                                      color: Colors.white60,
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                              ),
-                            ],
-                          ),
-                  ),
-                  // Sağ: Arama ikonu
-                  GestureDetector(
-                    onTap: () {
-                      setState(() {
-                        if (_isSearching) {
-                          _isSearching = false;
-                          _searchQuery = '';
-                          _searchController.clear();
-                        } else {
-                          _isSearching = true;
-                        }
-                      });
-                    },
-                    child: Container(
-                      width: 42,
-                      height: 42,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF1E1E1E),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.white12),
-                      ),
-                      child: Icon(
-                        _isSearching
-                            ? Icons.close_rounded
-                            : Icons.search_rounded,
-                        color: Colors.white54,
-                        size: 22,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
+            _buildHeader(vm),
 
             // ── Aktif Eşleşme Özet Bandı ─────────────────────
-            if (_lastErrorMessage != null && _chats.isNotEmpty)
+            if (vm.hasError && vm.rooms.isNotEmpty)
               Container(
                 margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
                 padding:
@@ -375,7 +57,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        _lastErrorMessage!,
+                        vm.error ?? 'Bağlantı sorunu',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
@@ -386,8 +68,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
                       ),
                     ),
                     TextButton(
-                      onPressed: () =>
-                          _loadChats(rebindGlobalWs: false, isRefresh: true),
+                      onPressed: () => vm.loadChatRooms(),
                       child: const Text('Yenile',
                           style: TextStyle(color: Colors.orangeAccent)),
                     ),
@@ -395,7 +76,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
                 ),
               ),
 
-            if (_chats.isNotEmpty)
+            if (vm.rooms.isNotEmpty)
               Container(
                 margin: const EdgeInsets.symmetric(horizontal: 20),
                 padding:
@@ -423,7 +104,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
                     ),
                     const SizedBox(width: 10),
                     Text(
-                      '${_chats.length} aktif sohbet',
+                      '${vm.rooms.length} aktif sohbet',
                       style: const TextStyle(
                         color: Colors.white70,
                         fontSize: 13,
@@ -431,7 +112,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
                       ),
                     ),
                     const Spacer(),
-                    if (totalUnread > 0)
+                    if (vm.totalUnreadCount > 0)
                       Container(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 8, vertical: 4),
@@ -440,7 +121,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: Text(
-                          '$totalUnread okunmamış',
+                          '${vm.totalUnreadCount} okunmamış',
                           style: const TextStyle(
                             color: Colors.redAccent,
                             fontSize: 11,
@@ -456,7 +137,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
 
             // ── Sohbet Listesi ────────────────────────────────
             Expanded(
-              child: _buildBody(displayedChats),
+              child: _buildBody(vm),
             ),
           ],
         ),
@@ -464,14 +145,75 @@ class _ChatListScreenState extends State<ChatListScreen> {
     );
   }
 
-  Widget _buildBody(List<Map<String, dynamic>> displayedChats) {
-    if (_viewState == _ChatListViewState.initialLoading) {
+  Widget _buildHeader(ChatListViewModel vm) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 20.0),
+      child: Row(
+        children: [
+          // Sol: Başlık + alt açıklama veya Arama Inputu
+          Expanded(
+            child: vm.isSearching
+                ? TextField(
+                    controller: vm.searchController,
+                    autofocus: true,
+                    style: const TextStyle(color: Colors.white, fontSize: 16),
+                    decoration: const InputDecoration(
+                      hintText: 'Sohbetlerde ara...',
+                      hintStyle: TextStyle(color: Colors.white38),
+                      border: InputBorder.none,
+                    ),
+                  )
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Sohbetler',
+                          style: Theme.of(context)
+                              .textTheme
+                              .headlineLarge
+                              ?.copyWith(color: Colors.white)),
+                      const SizedBox(height: 4),
+                      const Text(
+                        'Eşleşmelerinden gelen mesajlar',
+                        style: TextStyle(
+                          color: Colors.white60,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+          ),
+          // Sağ: Arama ikonu
+          GestureDetector(
+            onTap: vm.toggleSearch,
+            child: Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: const Color(0xFF1E1E1E),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.white12),
+              ),
+              child: Icon(
+                vm.isSearching ? Icons.close_rounded : Icons.search_rounded,
+                color: Colors.white54,
+                size: 22,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBody(ChatListViewModel vm) {
+    if (vm.isLoading && vm.rooms.isEmpty) {
       return const Center(
         child: CircularProgressIndicator(color: Colors.redAccent),
       );
     }
 
-    if (_viewState == _ChatListViewState.error && _chats.isEmpty) {
+    if (vm.hasError && vm.rooms.isEmpty) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 28),
@@ -482,17 +224,18 @@ class _ChatListScreenState extends State<ChatListScreen> {
                   color: Colors.orangeAccent, size: 38),
               const SizedBox(height: 10),
               Text(
-                _lastErrorMessage ?? 'Sohbetler yüklenemedi.',
+                vm.error ?? 'Sohbetler yüklenemedi.',
                 textAlign: TextAlign.center,
                 style: const TextStyle(color: Colors.white70, fontSize: 13),
               ),
               const SizedBox(height: 14),
               ElevatedButton(
-                onPressed: () => _loadChats(rebindGlobalWs: true),
+                onPressed: vm.loadChatRooms,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.redAccent,
                 ),
-                child: const Text('Tekrar Dene'),
+                child: const Text('Tekrar Dene',
+                    style: TextStyle(color: Colors.white)),
               ),
             ],
           ),
@@ -500,23 +243,25 @@ class _ChatListScreenState extends State<ChatListScreen> {
       );
     }
 
-    if (displayedChats.isEmpty) {
+    final displayedRooms = vm.displayedRooms;
+
+    if (displayedRooms.isEmpty) {
       return RefreshIndicator(
         color: Colors.redAccent,
-        onRefresh: () => _loadChats(rebindGlobalWs: true, isRefresh: true),
+        onRefresh: vm.onRefresh,
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
           children: [
             SizedBox(height: MediaQuery.of(context).size.height * 0.25),
             Center(
               child: Text(
-                _isSearching
+                vm.isSearching
                     ? 'Aradığınız kişiyle sohbet bulunamadı.'
                     : 'Henüz hiç eşleşmen veya sohbetin yok.',
                 style: const TextStyle(color: Colors.white54),
               ),
             ),
-            if (_isRefreshing) ...[
+            if (vm.isLoading) ...[
               const SizedBox(height: 14),
               const Center(
                 child: SizedBox(
@@ -536,13 +281,13 @@ class _ChatListScreenState extends State<ChatListScreen> {
 
     return RefreshIndicator(
       color: Colors.redAccent,
-      onRefresh: () => _loadChats(rebindGlobalWs: false, isRefresh: true),
+      onRefresh: vm.onRefresh,
       child: Stack(
         children: [
           ListView.separated(
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.symmetric(horizontal: 20),
-            itemCount: displayedChats.length,
+            itemCount: displayedRooms.length,
             separatorBuilder: (_, __) => Padding(
               padding: const EdgeInsets.symmetric(vertical: 4),
               child: Divider(
@@ -551,65 +296,26 @@ class _ChatListScreenState extends State<ChatListScreen> {
               ),
             ),
             itemBuilder: (context, index) {
-              final chat = displayedChats[index];
-              final avatarRaw = (chat['avatarUrl'] ?? '').toString().trim();
-              final avatarUrl = avatarRaw.isEmpty
-                  ? ''
-                  : (avatarRaw.startsWith('http://') ||
-                          avatarRaw.startsWith('https://')
-                      ? avatarRaw
-                      : (avatarRaw.startsWith('/')
-                          ? '${ApiService.baseUrl}$avatarRaw'
-                          : '${ApiService.baseUrl}/$avatarRaw'));
-
-              final roomId = (chat['roomId'] ?? '').toString();
-              final username = _resolveChatUsername(chat);
-
+              final room = displayedRooms[index];
               return _SwipeToDeleteChatItem(
-                key: ValueKey('chat-swipe-$roomId-$index'),
-                onDelete: () => _deleteChatForMe(roomId),
+                key: ValueKey('chat-swipe-${room.roomId}-$index'),
+                onDelete: () => vm.hideChat(room.roomId),
                 child: _ChatCard(
-                  username: username,
-                  avatarUrl: avatarUrl,
-                  isOnline: true,
-                  movieTitle:
-                      chat['movieTitle']?.toString() ?? 'Bilinmeyen Film',
-                  moviePoster: chat['moviePoster']?.toString() ?? '',
-                  lastMessage:
-                      chat['lastMessage']?.toString() ?? 'Sohbete başla...',
-                  time: _formatTime(chat['lastTimestamp'] as int?),
-                  unreadCount: (chat['unreadCount'] as int?) ?? 0,
-                  onTap: () {
-                    final roomId = chat['roomId']?.toString() ?? '';
-                    final roomStatus = chat['status']?.toString() ?? '';
-                    final isUnmatched = roomStatus == 'unmatched';
-                    Navigator.of(context)
-                        .push(
-                      MaterialPageRoute(
-                        builder: (_) => ChatDetailScreen(
-                          targetUserId: _resolveTargetUserId(chat),
-                          roomId: roomId,
-                          username: username,
-                          avatarSeed: chat['avatarSeed']?.toString() ?? '',
-                          avatarUrl: avatarUrl,
-                          isOnline: true,
-                          movieTitle: chat['movieTitle']?.toString() ?? '',
-                          moviePoster: chat['moviePoster']?.toString(),
-                          initialMessages: const [],
-                          isUnmatched: isUnmatched,
-                          unmatchedByUserId: chat['unmatchedBy']?.toString(),
-                        ),
-                      ),
-                    )
-                        .then((_) {
-                      _loadChats();
-                    });
-                  },
+                  username: room.username,
+                  avatarUrl: room.avatarUrl,
+                  avatarSeed: room.avatarSeed,
+                  isOnline: room.isOnline,
+                  movieTitle: room.movieTitle ?? 'Bilinmeyen Film',
+                  moviePoster: room.moviePoster ?? '',
+                  lastMessage: room.lastMessage ?? 'Sohbete başla...',
+                  time: _formatTime(room.lastMessageTime),
+                  unreadCount: room.unreadCount,
+                  onTap: () => vm.onChatTap(room),
                 ),
               );
             },
           ),
-          if (_isRefreshing)
+          if (vm.isLoading)
             Positioned(
               top: 10,
               right: 24,
@@ -644,12 +350,26 @@ class _ChatListScreenState extends State<ChatListScreen> {
       ),
     );
   }
+
+  String _formatTime(DateTime? time) {
+    if (time == null) return '';
+    final now = DateTime.now();
+    final isToday =
+        now.year == time.year && now.month == time.month && now.day == time.day;
+
+    if (isToday) {
+      return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+    } else {
+      return '${time.day.toString().padLeft(2, '0')}.${time.month.toString().padLeft(2, '0')}.${time.year}';
+    }
+  }
 }
 
 // ── Sohbet Kartı Bileşeni ─────────────────────────────────────
 class _ChatCard extends StatelessWidget {
   final String username;
-  final String avatarUrl;
+  final String? avatarUrl;
+  final String? avatarSeed;
   final bool isOnline;
   final String movieTitle;
   final String moviePoster;
@@ -661,6 +381,7 @@ class _ChatCard extends StatelessWidget {
   const _ChatCard({
     required this.username,
     required this.avatarUrl,
+    required this.avatarSeed,
     required this.isOnline,
     required this.movieTitle,
     required this.moviePoster,
@@ -707,27 +428,27 @@ class _ChatCard extends StatelessWidget {
                     color: const Color(0xFF1E1E1E),
                   ),
                   child: ClipOval(
-                    child: avatarUrl.isNotEmpty
+                    child: (avatarUrl != null && avatarUrl!.trim().isNotEmpty)
                         ? CachedNetworkImage(
-                            imageUrl: avatarUrl,
+                            imageUrl: avatarUrl!,
                             fit: BoxFit.cover,
                             placeholder: (_, __) => const Center(
                               child: Icon(
                                 Icons.person,
                                 color: Colors.white38,
-                                size: 22,
+                                size: 28,
                               ),
                             ),
                             errorWidget: (_, __, ___) => const Icon(
                               Icons.person,
                               color: Colors.white54,
-                              size: 22,
+                              size: 28,
                             ),
                           )
                         : const Icon(
                             Icons.person,
                             color: Colors.white54,
-                            size: 22,
+                            size: 28,
                           ),
                   ),
                 ),
@@ -762,15 +483,20 @@ class _ChatCard extends StatelessWidget {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text(
-                        username,
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 15,
-                          fontWeight:
-                              hasUnread ? FontWeight.bold : FontWeight.w600,
+                      Expanded(
+                        child: Text(
+                          username,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 15,
+                            fontWeight:
+                                hasUnread ? FontWeight.bold : FontWeight.w600,
+                          ),
                         ),
                       ),
+                      const SizedBox(width: 8),
                       Text(
                         time,
                         style: TextStyle(
@@ -809,6 +535,8 @@ class _ChatCard extends StatelessWidget {
                             const SizedBox(width: 4),
                             Text(
                               movieTitle,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
                                 color: Colors.redAccent,
                                 fontSize: 11,
@@ -901,8 +629,6 @@ class _SwipeToDeleteChatItemState extends State<_SwipeToDeleteChatItem> {
   void _handleDragEnd(DragEndDetails details, double width) {
     final dismissThreshold = width * _dismissThresholdRatio;
     if (-_offsetX >= dismissThreshold) {
-      debugPrint(
-          '[CHAT-DELETE-DBG][UI] drag dismiss triggered offset=$_offsetX width=$width');
       widget.onDelete();
       return;
     }
@@ -935,7 +661,6 @@ class _SwipeToDeleteChatItemState extends State<_SwipeToDeleteChatItem> {
                       child: IconButton(
                         icon: const Icon(Icons.delete, color: Colors.white),
                         onPressed: () {
-                          debugPrint('[CHAT-DELETE-DBG][UI] trash tapped');
                           widget.onDelete();
                         },
                       ),
@@ -954,12 +679,8 @@ class _SwipeToDeleteChatItemState extends State<_SwipeToDeleteChatItem> {
                   // Kartın görsel sağ kenarı (negatif offset olduğu için)
                   final cardRight = constraints.maxWidth + _offsetX;
                   if (details.localPosition.dx > cardRight) {
-                    // Çöp kutusu alanına basıldı → sil
-                    debugPrint(
-                        '[CHAT-DELETE-DBG][UI] onTapUp → trash area tapped');
                     widget.onDelete();
                   } else {
-                    // Kart alanına basıldı → geri kapat
                     setState(() => _offsetX = 0);
                   }
                   return;

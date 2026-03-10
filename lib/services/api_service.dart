@@ -1179,8 +1179,23 @@ class ApiService {
       ).timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
-        // OPTIMIZED: JSON parsing'i isolate'a taşı
-        return await parseJsonList(response.body);
+        final decoded = jsonDecode(response.body);
+
+        // Paginated format: { "messages": [...], "hasMore": bool }
+        if (decoded is Map<String, dynamic>) {
+          final List? msgs = decoded['messages'];
+          if (msgs != null) {
+            return msgs.cast<Map<String, dynamic>>();
+          }
+          return [];
+        }
+
+        // Legacy format: [...]
+        if (decoded is List) {
+          return decoded.cast<Map<String, dynamic>>();
+        }
+
+        return [];
       }
       return [];
     } catch (_) {

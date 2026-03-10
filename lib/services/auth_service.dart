@@ -1,27 +1,15 @@
-import 'package:shared_preferences/shared_preferences.dart';
+import '../core/services/auth_storage_service.dart';
 
 class AuthService {
-  static const String _tokenKey = 'auth_token';
-  static String? _token;
+  static AuthStorageService get _storage => AuthStorageService.instance;
 
-  static Future<void> init() async {
-    final prefs = await SharedPreferences.getInstance();
-    _token = prefs.getString(_tokenKey);
-  }
+  static Future<void> init() => _storage.init();
 
-  static String? get token => _token;
+  static String? get token => _storage.token;
 
-  static bool get isLoggedIn => _token != null && _token!.isNotEmpty;
+  static bool get isLoggedIn => _storage.isLoggedIn;
 
-  static Future<void> saveToken(String token) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_tokenKey, token);
-    _token = token;
-  }
+  static Future<void> saveToken(String token) => _storage.saveToken(token);
 
-  static Future<void> clearToken() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_tokenKey);
-    _token = null;
-  }
+  static Future<void> clearToken() => _storage.clearToken();
 }

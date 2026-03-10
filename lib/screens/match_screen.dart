@@ -4,7 +4,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import 'user_detail_screen.dart';
-import 'chat_detail_screen.dart';
+import '../features/chat/presentation/views/chat_detail_screen.dart';
 
 class MatchScreen extends StatefulWidget {
   const MatchScreen({super.key});

@@ -162,7 +162,8 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
       _HelpCategory(
         id: 'profile_privacy',
         title: 'Profil, Gizlilik ve Hesap',
-        subtitle: 'Profil görünürlüğü, hesap ayarları ve engellenen kullanıcılar',
+        subtitle:
+            'Profil görünürlüğü, hesap ayarları ve engellenen kullanıcılar',
         icon: Icons.shield_outlined,
         faqs: [
           _HelpFaq(

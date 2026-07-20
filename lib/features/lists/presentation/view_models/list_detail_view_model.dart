@@ -52,7 +52,8 @@ class ListDetailViewModel extends BaseViewModel {
     setLoading(true);
 
     for (final tmdbId in pendingRemovals.toList()) {
-      await AppScope.instance.listsRepository.removeMovieFromList(listId, tmdbId);
+      await AppScope.instance.listsRepository
+          .removeMovieFromList(listId, tmdbId);
       items.removeWhere((item) => item.tmdbId == tmdbId);
       pendingRemovals.remove(tmdbId);
     }
@@ -65,14 +66,15 @@ class ListDetailViewModel extends BaseViewModel {
     setLoading(false);
     isEditing = false;
     notifyListeners();
-    emitEffect(const ShowSnackbarEffect(message: 'Liste guncellendi.'));
+    emitEffect(const ShowSnackbarEffect(message: 'Liste güncellendi.'));
   }
 
   Future<void> rename(String newName) async {
     final renamed =
         await AppScope.instance.listsRepository.renameList(listId, newName);
     if (renamed == null) {
-      emitEffect(const ShowSnackbarEffect(message: 'Liste adi guncellenemedi.'));
+      emitEffect(
+          const ShowSnackbarEffect(message: 'Liste adı güncellenemedi.'));
       return;
     }
     listName = renamed.name;

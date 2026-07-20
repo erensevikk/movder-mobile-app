@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../../app/app_scope.dart';
 import '../../../../core/base/base_view_model.dart';
 import '../../../../core/base/view_effect.dart';
 import '../../data/models/chat_model.dart';
@@ -21,6 +22,7 @@ class ChatListViewModel extends BaseViewModel {
   final TextEditingController searchController = TextEditingController();
 
   // Getters
+  bool get isLoggedIn => AppScope.instance.authStorage.isLoggedIn;
   List<ChatRoomModel> get rooms => _rooms;
   String? get error => _error;
   bool get hasError => _error != null;
@@ -50,7 +52,9 @@ class ChatListViewModel extends BaseViewModel {
   @override
   Future<void> initialize() async {
     searchController.addListener(_onSearchChanged);
-    await loadChatRooms();
+    if (isLoggedIn) {
+      await loadChatRooms();
+    }
   }
 
   void _onSearchChanged() {
@@ -68,6 +72,8 @@ class ChatListViewModel extends BaseViewModel {
   }
 
   Future<void> loadChatRooms() async {
+    if (!isLoggedIn) return;
+
     setLoading(true);
     setError(null);
 
@@ -98,9 +104,36 @@ class ChatListViewModel extends BaseViewModel {
   }
 
   void onChatTap(ChatRoomModel room) {
+    _markRoomAsReadLocally(room.roomId);
     emitEffect(NavigateToEffect(
       pageBuilder: (context) => _buildChatDetailPage(room),
+      onPopped: (_) {
+        loadChatRooms();
+      },
     ));
+  }
+
+  void _markRoomAsReadLocally(String roomId) {
+    final index = _rooms.indexWhere((room) => room.roomId == roomId);
+    if (index < 0) return;
+
+    final room = _rooms[index];
+    if (room.unreadCount == 0) return;
+
+    _rooms[index] = ChatRoomModel(
+      roomId: room.roomId,
+      targetUserId: room.targetUserId,
+      username: room.username,
+      avatarSeed: room.avatarSeed,
+      avatarUrl: room.avatarUrl,
+      movieTitle: room.movieTitle,
+      moviePoster: room.moviePoster,
+      lastMessage: room.lastMessage,
+      lastMessageTime: room.lastMessageTime,
+      unreadCount: 0,
+      isOnline: room.isOnline,
+    );
+    notifyListeners();
   }
 
   Widget _buildChatDetailPage(ChatRoomModel room) {

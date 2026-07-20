@@ -82,7 +82,7 @@ class AccountInfoViewModel extends BaseViewModel {
       return;
     }
 
-    emitEffect(const ShowSnackbarEffect(message: 'Bilgiler guncellendi.'));
+    emitEffect(const ShowSnackbarEffect(message: 'Bilgiler güncellendi.'));
     emitEffect(const PopEffect(true));
   }
 }

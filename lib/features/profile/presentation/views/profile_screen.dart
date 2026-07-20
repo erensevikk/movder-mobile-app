@@ -7,6 +7,8 @@ import '../../../../core/base/base_state.dart';
 import '../../../../core/mixins/view_effect_listener_mixin.dart';
 import '../../../../core/mixins/view_model_binding_mixin.dart';
 import '../../../../shared/widgets/loading_view.dart';
+import '../../../../core/theme/app_colors.dart';
+import '../../../../screens/user_detail_screen.dart';
 import '../view_models/profile_screen_view_model.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -29,18 +31,19 @@ class ProfileScreenState extends State<ProfileScreen>
   Widget buildWithViewModel(BuildContext context, ProfileScreenViewModel vm) {
     if (vm.status == ViewStatus.loading) {
       return const Scaffold(
-        backgroundColor: Color(0xFF0F0F0F),
+        backgroundColor: AppColors.background,
         body: LoadingView(),
       );
     }
 
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: AppColors.background,
       body: SafeArea(
+        top: false,
         child: ClipRect(
           child: vm.isLoggedIn
               ? RefreshIndicator(
-                  color: Colors.redAccent,
+                  color: AppColors.primary,
                   onRefresh: vm.refresh,
                   child: CustomScrollView(
                     slivers: [
@@ -59,7 +62,7 @@ class ProfileScreenState extends State<ProfileScreen>
                               const Text(
                                 'AYARLAR',
                                 style: TextStyle(
-                                  color: Colors.white54,
+                                  color: AppColors.textMedium,
                                   fontSize: 13,
                                   fontWeight: FontWeight.w600,
                                   letterSpacing: 1.2,
@@ -108,7 +111,7 @@ class ProfileScreenState extends State<ProfileScreen>
         const Text(
           'PROFİL',
           style: TextStyle(
-            color: Colors.white54,
+            color: AppColors.textMedium,
             fontSize: 13,
             fontWeight: FontWeight.w600,
             letterSpacing: 1.2,
@@ -120,20 +123,21 @@ class ProfileScreenState extends State<ProfileScreen>
           height: 56,
           child: ElevatedButton.icon(
             onPressed: vm.openProfileDetails,
-            icon: const Icon(Icons.person_search_rounded, color: Colors.white),
+            icon: const Icon(Icons.person_search_rounded,
+                color: AppColors.textHigh),
             label: const Text(
               'Profilimi Görüntüle',
               style: TextStyle(
-                color: Colors.white,
+                color: AppColors.textHigh,
                 fontSize: 16,
                 fontWeight: FontWeight.bold,
               ),
             ),
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF1E1E1E),
+              backgroundColor: AppColors.surface,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(14),
-                side: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
+                side: const BorderSide(color: AppColors.divider),
               ),
             ),
           ),
@@ -148,18 +152,18 @@ class ProfileScreenState extends State<ProfileScreen>
       height: 52,
       child: OutlinedButton.icon(
         onPressed: vm.openImport,
-        icon: const Icon(Icons.sync_rounded, color: Color(0xFF40BCF4)),
+        icon: const Icon(Icons.sync_rounded, color: AppColors.secondary),
         label: const Text(
           'Letterboxd Verilerini İçe Aktar',
           style: TextStyle(
-            color: Color(0xFF40BCF4),
+            color: AppColors.secondary,
             fontSize: 15,
             fontWeight: FontWeight.w600,
           ),
         ),
         style: OutlinedButton.styleFrom(
-          side: const BorderSide(color: Color(0xFF2C3440)),
-          backgroundColor: const Color(0xFF141A1F),
+          side: const BorderSide(color: AppColors.divider),
+          backgroundColor: AppColors.surface,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(14),
           ),
@@ -174,17 +178,17 @@ class ProfileScreenState extends State<ProfileScreen>
       height: 56,
       child: OutlinedButton.icon(
         onPressed: vm.logout,
-        icon: const Icon(Icons.logout, color: Colors.redAccent),
+        icon: const Icon(Icons.logout, color: AppColors.error),
         label: const Text(
           'Çıkış Yap',
           style: TextStyle(
-            color: Colors.redAccent,
+            color: AppColors.error,
             fontSize: 16,
             fontWeight: FontWeight.bold,
           ),
         ),
         style: OutlinedButton.styleFrom(
-          side: BorderSide(color: Colors.redAccent.withValues(alpha: 0.5)),
+          side: BorderSide(color: AppColors.error.withValues(alpha: 0.5)),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(14),
           ),
@@ -192,6 +196,7 @@ class ProfileScreenState extends State<ProfileScreen>
       ),
     );
   }
+
 }
 
 class _ProfileHeader extends StatelessWidget {
@@ -226,11 +231,11 @@ class _ProfileHeader extends StatelessWidget {
                       imageUrl: vm.coverImageUrl,
                       fit: BoxFit.cover,
                       placeholder: (_, __) =>
-                          Container(color: const Color(0xFF1E1E1E)),
+                          Container(color: AppColors.surface),
                       errorWidget: (_, __, ___) =>
-                          Container(color: const Color(0xFF1E1E1E)),
+                          Container(color: AppColors.surface),
                     )
-                  : Container(color: const Color(0xFF1E1E1E)),
+                  : Container(color: AppColors.surface),
             ),
             Positioned(
               top: 0,
@@ -243,8 +248,8 @@ class _ProfileHeader extends StatelessWidget {
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
                     colors: [
-                      Colors.black.withValues(alpha: 0.15),
-                      Colors.black.withValues(alpha: 0.45),
+                      AppColors.overlay.withValues(alpha: 0.15),
+                      AppColors.overlay.withValues(alpha: 0.45),
                     ],
                   ),
                 ),
@@ -260,9 +265,8 @@ class _ProfileHeader extends StatelessWidget {
                     height: avatarSize,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: const Color(0xFF1E1E1E),
-                      border:
-                          Border.all(color: const Color(0xFF0F0F0F), width: 4),
+                      color: AppColors.surface,
+                      border: Border.all(color: AppColors.background, width: 4),
                       image: profile.avatarUrl.isNotEmpty
                           ? DecorationImage(
                               image:
@@ -275,7 +279,7 @@ class _ProfileHeader extends StatelessWidget {
                         ? const Icon(
                             Icons.person,
                             size: 50,
-                            color: Colors.white54,
+                            color: AppColors.textMedium,
                           )
                         : null,
                   ),
@@ -287,11 +291,10 @@ class _ProfileHeader extends StatelessWidget {
                       height: 22,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        color: isWatching
-                            ? Colors.redAccent
-                            : const Color(0xFF4CAF50),
-                        border: Border.all(
-                            color: const Color(0xFF0F0F0F), width: 4),
+                        color:
+                            isWatching ? AppColors.primary : AppColors.success,
+                        border:
+                            Border.all(color: AppColors.background, width: 4),
                       ),
                     ),
                   ),
@@ -309,7 +312,7 @@ class _ProfileHeader extends StatelessWidget {
               Text(
                 profile.username,
                 style: const TextStyle(
-                  color: Colors.white,
+                  color: AppColors.textHigh,
                   fontSize: 24,
                   fontWeight: FontWeight.bold,
                 ),
@@ -331,9 +334,9 @@ class _ProfileHeader extends StatelessWidget {
         margin: const EdgeInsets.only(top: 4),
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
-          color: const Color(0xFF0D2318),
+          color: AppColors.success.withValues(alpha: 0.12),
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: const Color(0xFF1A4A2E)),
+          border: Border.all(color: AppColors.success.withValues(alpha: 0.35)),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -342,7 +345,7 @@ class _ProfileHeader extends StatelessWidget {
               width: 8,
               height: 8,
               decoration: const BoxDecoration(
-                color: Color(0xFF4CAF50),
+                color: AppColors.success,
                 shape: BoxShape.circle,
               ),
             ),
@@ -350,7 +353,7 @@ class _ProfileHeader extends StatelessWidget {
             const Text(
               'Çevrimiçi',
               style: TextStyle(
-                color: Color(0xFF81C784),
+                color: AppColors.success,
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
               ),
@@ -364,9 +367,9 @@ class _ProfileHeader extends StatelessWidget {
       margin: const EdgeInsets.only(top: 4),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: Colors.redAccent.withValues(alpha: 0.1),
+        color: AppColors.primary.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.redAccent.withValues(alpha: 0.25)),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.25)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -375,7 +378,7 @@ class _ProfileHeader extends StatelessWidget {
             width: 8,
             height: 8,
             decoration: const BoxDecoration(
-              color: Colors.redAccent,
+              color: AppColors.primary,
               shape: BoxShape.circle,
             ),
           ),
@@ -384,7 +387,7 @@ class _ProfileHeader extends StatelessWidget {
             child: Text(
               '$movieName izliyor — $watchingFor',
               style: TextStyle(
-                color: Colors.redAccent.withValues(alpha: 0.9),
+                color: AppColors.primary.withValues(alpha: 0.9),
                 fontSize: 12,
                 fontWeight: FontWeight.w500,
               ),
@@ -411,9 +414,8 @@ class _GuestProfile extends StatelessWidget {
           imageUrl:
               'https://image.tmdb.org/t/p/w780/xbiycuc84TrieEWwkkuH2hoEa9S.jpg',
           fit: BoxFit.cover,
-          placeholder: (_, __) => Container(color: const Color(0xFF0F0F0F)),
-          errorWidget: (_, __, ___) =>
-              Container(color: const Color(0xFF0F0F0F)),
+          placeholder: (_, __) => Container(color: AppColors.background),
+          errorWidget: (_, __, ___) => Container(color: AppColors.background),
         ),
         BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
@@ -423,8 +425,8 @@ class _GuestProfile extends StatelessWidget {
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
                 colors: <Color>[
-                  Colors.black.withValues(alpha: 0.55),
-                  Colors.black.withValues(alpha: 0.85),
+                  AppColors.overlay.withValues(alpha: 0.55),
+                  AppColors.overlay.withValues(alpha: 0.85),
                 ],
               ),
             ),
@@ -442,16 +444,16 @@ class _GuestProfile extends StatelessWidget {
                     width: 56,
                     height: 56,
                     decoration: BoxDecoration(
-                      gradient: LinearGradient(
+                      gradient: const LinearGradient(
                         colors: <Color>[
-                          Colors.redAccent,
-                          Colors.redAccent.shade700,
+                          AppColors.primary,
+                          AppColors.tertiary,
                         ],
                       ),
                       borderRadius: BorderRadius.circular(16),
                       boxShadow: [
                         BoxShadow(
-                          color: Colors.redAccent.withValues(alpha: 0.35),
+                          color: AppColors.primary.withValues(alpha: 0.35),
                           blurRadius: 20,
                           offset: const Offset(0, 6),
                         ),
@@ -459,7 +461,7 @@ class _GuestProfile extends StatelessWidget {
                     ),
                     child: const Icon(
                       Icons.movie_filter_rounded,
-                      color: Colors.white,
+                      color: AppColors.textHigh,
                       size: 30,
                     ),
                   ),
@@ -467,7 +469,7 @@ class _GuestProfile extends StatelessWidget {
                   const Text(
                     'Movder',
                     style: TextStyle(
-                      color: Colors.white,
+                      color: AppColors.textHigh,
                       fontSize: 30,
                       fontWeight: FontWeight.bold,
                       letterSpacing: 1,
@@ -477,7 +479,7 @@ class _GuestProfile extends StatelessWidget {
                   Text(
                     'Yalniz izleme devri bitti.',
                     style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.6),
+                      color: AppColors.textHigh.withValues(alpha: 0.6),
                       fontSize: 14,
                       fontWeight: FontWeight.w500,
                     ),
@@ -490,10 +492,10 @@ class _GuestProfile extends StatelessWidget {
                       vertical: 12,
                     ),
                     decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.06),
+                      color: AppColors.textHigh.withValues(alpha: 0.06),
                       borderRadius: BorderRadius.circular(14),
                       border: Border.all(
-                          color: Colors.white.withValues(alpha: 0.08)),
+                          color: AppColors.textHigh.withValues(alpha: 0.08)),
                     ),
                     child: Text(
                       'Movder, aynı anda aynı filmi izleyen insanları '
@@ -502,7 +504,7 @@ class _GuestProfile extends StatelessWidget {
                       'saniyeler içinde buluş ve birlikte keyfini çıkar.',
                       textAlign: TextAlign.center,
                       style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.55),
+                        color: AppColors.textHigh.withValues(alpha: 0.55),
                         fontSize: 13,
                         height: 1.5,
                       ),
@@ -555,17 +557,17 @@ class _GuestProfile extends StatelessWidget {
                     child: ElevatedButton(
                       onPressed: vm.openLogin,
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.redAccent,
+                        backgroundColor: AppColors.primary,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(14),
                         ),
                         elevation: 8,
-                        shadowColor: Colors.redAccent.withValues(alpha: 0.4),
+                        shadowColor: AppColors.primary.withValues(alpha: 0.4),
                       ),
                       child: const Text(
                         'Giriş Yap',
                         style: TextStyle(
-                          color: Colors.white,
+                          color: AppColors.textHigh,
                           fontSize: 16,
                           fontWeight: FontWeight.bold,
                           letterSpacing: 0.5,
@@ -581,7 +583,7 @@ class _GuestProfile extends StatelessWidget {
                       onPressed: vm.openRegister,
                       style: OutlinedButton.styleFrom(
                         side: BorderSide(
-                          color: Colors.white.withValues(alpha: 0.2),
+                          color: AppColors.textHigh.withValues(alpha: 0.2),
                           width: 1.5,
                         ),
                         shape: RoundedRectangleBorder(
@@ -591,7 +593,7 @@ class _GuestProfile extends StatelessWidget {
                       child: Text(
                         'Kayıt Ol',
                         style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.8),
+                          color: AppColors.textHigh.withValues(alpha: 0.8),
                           fontSize: 16,
                           fontWeight: FontWeight.bold,
                           letterSpacing: 0.5,
@@ -626,21 +628,21 @@ class _SettingsItem extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
-        color: const Color(0xFF1E1E1E),
+        color: AppColors.surface,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white10),
+        border: Border.all(color: AppColors.divider),
       ),
       child: ListTile(
-        leading: Icon(icon, color: Colors.white70),
+        leading: Icon(icon, color: AppColors.textMedium),
         title: Text(
           title,
           style: const TextStyle(
-            color: Colors.white,
+            color: AppColors.textHigh,
             fontSize: 15,
             fontWeight: FontWeight.w500,
           ),
         ),
-        trailing: const Icon(Icons.chevron_right, color: Colors.white38),
+        trailing: const Icon(Icons.chevron_right, color: AppColors.textMedium),
         onTap: onTap,
       ),
     );
@@ -663,18 +665,18 @@ class _FeatureCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.05),
+        color: AppColors.textHigh.withValues(alpha: 0.05),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+        border: Border.all(color: AppColors.textHigh.withValues(alpha: 0.06)),
       ),
       child: Column(
         children: <Widget>[
-          Icon(icon, color: Colors.redAccent, size: 28),
+          Icon(icon, color: AppColors.primary, size: 28),
           const SizedBox(height: 8),
           Text(
             title,
             style: const TextStyle(
-              color: Colors.white,
+              color: AppColors.textHigh,
               fontSize: 14,
               fontWeight: FontWeight.bold,
             ),
@@ -684,8 +686,8 @@ class _FeatureCard extends StatelessWidget {
           Text(
             subtitle,
             textAlign: TextAlign.center,
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.4),
+            style: const TextStyle(
+              color: AppColors.textMedium,
               fontSize: 12,
               height: 1.3,
             ),

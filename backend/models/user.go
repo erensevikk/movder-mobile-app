@@ -13,6 +13,13 @@ type WatchHistoryItem struct {
 	WatchedAt  time.Time `json:"watchedAt" bson:"watched_at"`
 }
 
+type MatchHistoryItem struct {
+	MatchedUserID primitive.ObjectID `json:"matchedUserId" bson:"matched_user_id"`
+	TmdbID        int                `json:"tmdbId" bson:"tmdb_id"`
+	MovieName     string             `json:"movieName" bson:"movie_name"`
+	MatchedAt     time.Time          `json:"matchedAt" bson:"matched_at"`
+}
+
 type NotificationSettings struct {
 	PushEnabled   bool `json:"pushEnabled" bson:"push_enabled"`
 	MatchAlerts   bool `json:"matchAlerts" bson:"match_alerts"`
@@ -42,6 +49,7 @@ type User struct {
 	BlockedUsers         []primitive.ObjectID `json:"blockedUsers,omitempty" bson:"blocked_users,omitempty"`
 	UnmatchedUsers       []primitive.ObjectID `json:"unmatchedUsers,omitempty" bson:"unmatched_users,omitempty"`
 	WatchHistory         []WatchHistoryItem   `json:"watchHistory,omitempty" bson:"watch_history,omitempty"`
+	MatchHistory         []MatchHistoryItem   `json:"matchHistory,omitempty" bson:"match_history,omitempty"`
 	NotificationSettings NotificationSettings `json:"notificationSettings" bson:"notification_settings"`
 	PrivacySettings      *PrivacySettings     `json:"privacySettings,omitempty" bson:"privacy_settings,omitempty"`
 }

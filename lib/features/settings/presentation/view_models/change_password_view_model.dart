@@ -56,7 +56,7 @@ class ChangePasswordViewModel extends BaseViewModel {
       return;
     }
 
-    emitEffect(const ShowSnackbarEffect(message: 'Sifre guncellendi.'));
+    emitEffect(const ShowSnackbarEffect(message: 'Şifre güncellendi.'));
     emitEffect(const PopEffect(true));
   }
 

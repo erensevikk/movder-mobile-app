@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../core/mixins/view_model_binding_mixin.dart';
+import '../core/theme/app_colors.dart';
 import '../features/home/presentation/views/home_radar_screen.dart';
 import '../features/match/presentation/views/match_screen.dart';
 import '../features/notifications/presentation/views/notification_screen.dart';
 import '../features/profile/presentation/views/profile_screen.dart';
 import '../features/chat/presentation/views/chat_list_screen.dart';
+import '../features/match/data/models/match_model.dart';
 import '../services/global_chat_service.dart';
 import '../services/notification_service.dart';
 import 'app_shell_view_model.dart';
@@ -34,7 +36,7 @@ class _MainNavigatorScreenState extends State<MainNavigatorScreen>
     super.initState();
     SystemChrome.setSystemUIOverlayStyle(
       const SystemUiOverlayStyle(
-        statusBarColor: Color(0xFF0F0F0F),
+        statusBarColor: Colors.transparent,
         statusBarIconBrightness: Brightness.light,
         statusBarBrightness: Brightness.dark,
       ),
@@ -42,6 +44,10 @@ class _MainNavigatorScreenState extends State<MainNavigatorScreen>
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
+      
+      // Arka planda eşleşme ararken, o sekmeyi canlandırıp otomatik odaklanması için dinleyici
+      _matchKey.currentState?.viewModel.addListener(_onMatchStatusChanged);
+      
       NotificationService.instance.init(context);
       await GlobalChatService.instance.init(<Map<String, dynamic>>[]);
       GlobalChatService.instance
@@ -49,8 +55,21 @@ class _MainNavigatorScreenState extends State<MainNavigatorScreen>
     });
   }
 
+  void _onMatchStatusChanged() {
+    final matchVm = _matchKey.currentState?.viewModel;
+    if (matchVm != null && matchVm.status == MatchStatus.found) {
+      if (viewModel.currentIndex != 1) {
+        // Eşleşme bulunduysa, kullanıcıyı o ekrana otomatik fırlatıyoruz:
+        _matchKey.currentState?.setVisibility(true);
+        _matchKey.currentState?.reloadWatchingStatus();
+        viewModel.selectTab(1);
+      }
+    }
+  }
+
   @override
   void dispose() {
+    _matchKey.currentState?.viewModel.removeListener(_onMatchStatusChanged);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -73,7 +92,7 @@ class _MainNavigatorScreenState extends State<MainNavigatorScreen>
   Widget buildWithViewModel(BuildContext context, AppShellViewModel vm) {
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: const SystemUiOverlayStyle(
-        statusBarColor: Color(0xFF0F0F0F),
+        statusBarColor: Colors.transparent,
         statusBarIconBrightness: Brightness.light,
         statusBarBrightness: Brightness.dark,
       ),
@@ -83,9 +102,9 @@ class _MainNavigatorScreenState extends State<MainNavigatorScreen>
           children: _pages(vm),
         ),
         bottomNavigationBar: BottomNavigationBar(
-          backgroundColor: const Color(0xFF0F0F0F),
-          selectedItemColor: Colors.redAccent,
-          unselectedItemColor: Colors.white54,
+          backgroundColor: AppColors.background,
+          selectedItemColor: AppColors.primary,
+          unselectedItemColor: AppColors.textMedium,
           type: BottomNavigationBarType.fixed,
           currentIndex: vm.currentIndex,
           onTap: (index) {

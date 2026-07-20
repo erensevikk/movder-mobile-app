@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../core/services/auth_storage_service.dart';
+import '../core/theme/app_colors.dart';
 import '../services/auth_service.dart';
 import 'app.dart';
 
@@ -9,7 +10,7 @@ Future<void> bootstrap() async {
   WidgetsFlutterBinding.ensureInitialized();
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
-      statusBarColor: Color(0xFF0F0F0F),
+      statusBarColor: AppColors.background,
       statusBarIconBrightness: Brightness.light,
       statusBarBrightness: Brightness.dark,
     ),

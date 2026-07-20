@@ -6,6 +6,7 @@ import '../models/movie_list_model.dart';
 import '../models/profile_model.dart';
 import '../models/user_profile_model.dart';
 import '../models/watch_status_model.dart';
+import '../models/match_history_model.dart';
 import '../repositories/profile_repository.dart';
 
 class ProfileRepositoryImpl implements ProfileRepository {
@@ -96,5 +97,12 @@ class ProfileRepositoryImpl implements ProfileRepository {
     final latest = await ApiService.getProfile();
     if (latest == null) return null;
     return UserProfileModel.fromMap(latest);
+  }
+
+  @override
+  Future<MatchHistoryResponse?> getMatchHistory({int page = 1, int limit = 20}) async {
+    final response = await ApiService.getMatchHistory(page: page, limit: limit);
+    if (response == null) return null;
+    return MatchHistoryResponse.fromJson(response);
   }
 }

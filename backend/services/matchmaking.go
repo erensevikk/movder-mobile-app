@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"math/rand"
 	"movder-backend/config"
+	"movder-backend/models"
 	"strconv"
 	"strings"
 	"sync"
@@ -204,24 +204,8 @@ func (p *CandidatePool) FindMatch(tmdbID int, req MatchRequest, myUser *UserInfo
 			}
 		}
 
-		// Unmatched kontrolü
-		unmatchedPrior := false
-		for _, uID := range myUser.UnmatchedUsers {
-			if uID == targetID {
-				unmatchedPrior = true
-				break
-			}
-		}
+		// UnmatchedPrior / Olasılık kontrolleri kaldırıldı, doğrudan eşleş
 
-		// Olasılık kontrolü
-		randVal := rand.Intn(100)
-		threshold := 50
-		if unmatchedPrior {
-			threshold = 25
-		}
-		if randVal >= threshold {
-			return true
-		}
 
 		// Eşleşme bulundu!
 		matchedReq = &candidate
@@ -273,22 +257,8 @@ func (p *CandidatePool) FindMatch(tmdbID int, req MatchRequest, myUser *UserInfo
 				}
 			}
 
-			unmatchedPrior := false
-			for _, uID := range myUser.UnmatchedUsers {
-				if uID == targetID {
-					unmatchedPrior = true
-					break
-				}
-			}
+			// UnmatchedPrior / Olasılık kontrolleri kaldırıldı, doğrudan eşleş
 
-			randVal := rand.Intn(100)
-			threshold := 50
-			if unmatchedPrior {
-				threshold = 25
-			}
-			if randVal >= threshold {
-				continue
-			}
 
 			matchedReq = &candidate
 			break
@@ -320,6 +290,10 @@ func (p *CandidatePool) FindMatch(tmdbID int, req MatchRequest, myUser *UserInfo
 	answerJSON, _ := json.Marshal(result)
 	config.RedisClient.Set(ctx, "chatroom:"+roomID, answerJSON, 4*time.Hour)
 	config.RedisClient.Set(ctx, "user_match:"+matchedReq.UserID, answerJSON, 15*time.Second)
+
+	// Eşleşen kullanıcıları aktif kuyruk listesinden kaldır (kuyruk bekleme sayısını doğru göstermek için)
+	config.RedisClient.ZRem(ctx, "match_queue_active", fmt.Sprintf("%d:%s", tmdbID, req.UserID))
+	config.RedisClient.ZRem(ctx, "match_queue_active", fmt.Sprintf("%d:%s", tmdbID, matchedReq.UserID))
 
 	log.Printf("🎉 Eşleşme bulundu! %s ↔ %s (%s)", req.Username, matchedReq.Username, req.MovieName)
 
@@ -547,12 +521,14 @@ func GetAcceptStatus(userId, roomID string) (map[string]interface{}, error) {
 	chatroomKey := "chatroom:" + roomID
 	roomData, err := config.RedisClient.Get(ctx, chatroomKey).Result()
 	if err != nil {
-		return map[string]interface{}{"bothAccepted": false}, nil
+		// NOT: Chatroom odası silindiyse "rejected" veya "timeout" olmuş demektir.
+		// Bu durumda frontend'e rejected: true dönerek açık kalan pencerelerin kapanmasını sağlayalım!
+		return map[string]interface{}{"bothAccepted": false, "rejected": true}, nil
 	}
 
 	var matchResult MatchResult
 	if err := json.Unmarshal([]byte(roomData), &matchResult); err != nil {
-		return map[string]interface{}{"bothAccepted": false}, nil
+		return map[string]interface{}{"bothAccepted": false, "rejected": true}, nil
 	}
 
 	// Target user ID
@@ -631,10 +607,12 @@ func getOrCreateChatRoom(ctx context.Context, userId, targetUserId, fallbackRoom
 
 	// Yeni oluştur
 	var movieName, posterUrl string
+	var tmdbId int
 	if roomData, err2 := config.RedisClient.Get(ctx, "chatroom:"+fallbackRoomID).Result(); err2 == nil {
 		var matchResult MatchResult
 		if errUnmarshal := json.Unmarshal([]byte(roomData), &matchResult); errUnmarshal == nil {
 			movieName = matchResult.MovieName
+			tmdbId = matchResult.TmdbID
 		}
 	}
 
@@ -647,15 +625,57 @@ func getOrCreateChatRoom(ctx context.Context, userId, targetUserId, fallbackRoom
 		"createdAt": time.Now(),
 	})
 
-	// Bildirimler oluştur
+	// Eşleşme geçmişini MongoDB'ye kaydet
 	userCol := config.GetCollection(config.DB, "users")
+
+	objId1, _ := primitive.ObjectIDFromHex(userId)
+	objId2, _ := primitive.ObjectIDFromHex(targetUserId)
+
+	matchTime := time.Now()
+
+	// user1 için user2'yi kaydet
+	historyItem1 := models.MatchHistoryItem{
+		MatchedUserID: objId2,
+		TmdbID:        tmdbId,
+		MovieName:     movieName,
+		MatchedAt:     matchTime,
+	}
+	userCol.UpdateOne(ctx,
+		bson.M{"_id": objId1},
+		bson.M{
+			"$push": bson.M{
+				"match_history": bson.M{
+					"$each":     []interface{}{historyItem1},
+					"$position": 0,
+				},
+			},
+		},
+	)
+
+	// user2 için user1'i kaydet
+	historyItem2 := models.MatchHistoryItem{
+		MatchedUserID: objId1,
+		TmdbID:        tmdbId,
+		MovieName:     movieName,
+		MatchedAt:     matchTime,
+	}
+	userCol.UpdateOne(ctx,
+		bson.M{"_id": objId2},
+		bson.M{
+			"$push": bson.M{
+				"match_history": bson.M{
+					"$each":     []interface{}{historyItem2},
+					"$position": 0,
+				},
+			},
+		},
+	)
+
+	// Bildirimler oluştur
 	var user1, user2 struct {
 		Username  string `bson:"username"`
 		AvatarURL string `bson:"avatarUrl"`
 	}
-
-	objId1, _ := primitive.ObjectIDFromHex(userId)
-	objId2, _ := primitive.ObjectIDFromHex(targetUserId)
 
 	_ = userCol.FindOne(ctx, bson.M{"_id": objId1}).Decode(&user1)
 	_ = userCol.FindOne(ctx, bson.M{"_id": objId2}).Decode(&user2)

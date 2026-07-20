@@ -18,6 +18,7 @@ func UserRoutes(r *gin.Engine) {
 	{
 		protected.GET("/profile", controllers.GetProfile())
 		protected.POST("/profile", controllers.UpdateProfile())
+		protected.GET("/profile/match-history", controllers.GetMatchHistory())
 		protected.GET("/users/search", controllers.SearchUsers())
 		protected.GET("/users/:targetId", controllers.GetUserProfile())
 		protected.POST("/users/block/:targetId", controllers.BlockUser())

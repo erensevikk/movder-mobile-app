@@ -5,23 +5,27 @@ import '../../../../core/base/base_view_model.dart';
 import '../../../../core/base/view_effect.dart';
 import '../../../../core/utils/debouncer.dart';
 import '../../../../models/movie.dart';
+import '../../../chat/presentation/views/chat_detail_screen.dart';
 import '../../data/models/match_model.dart';
 import '../../data/repositories/match_repository.dart' as repo;
+import '../../data/services/match_websocket_service.dart';
 
 class MatchScreenViewModel extends BaseViewModel {
   MatchScreenViewModel({
     required repo.MatchRepository repository,
+    required MatchWebSocketService wsService,
   })  : _repository = repository,
+        _wsService = wsService,
         _debouncer = Debouncer(const Duration(milliseconds: 350));
 
   final repo.MatchRepository _repository;
+  final MatchWebSocketService _wsService;
   final Debouncer _debouncer;
 
-  // Timer for polling
-  Timer? _pollingTimer;
-  Duration _currentPollInterval = const Duration(milliseconds: 500);
-  static const Duration _minPollInterval = Duration(milliseconds: 500);
-  static const Duration _maxPollInterval = Duration(seconds: 2);
+  StreamSubscription? _wsSubscription;
+
+  // Global queue polling
+  Timer? _globalQueueTimer;
 
   // State
   MatchStatus status = MatchStatus.idle;
@@ -47,8 +51,80 @@ class MatchScreenViewModel extends BaseViewModel {
   @override
   Future<void> initialize() async {
     await loadWatchStatus();
-    // In a real app, get current user avatar from a profile service
-    // We'll set it here manually for visual demonstration in the search view
+    _initWebSocket();
+  }
+
+  void _initWebSocket() {
+    _wsSubscription?.cancel();
+    _wsService.connect();
+    _wsSubscription = _wsService.events.listen(_handleWebSocketEvent);
+  }
+
+  void _handleWebSocketEvent(Map<String, dynamic> event) {
+    final type = event['type'] as String?;
+    
+    switch (type) {
+      case 'searching':
+        queueCount = (event['queueCount'] as num?)?.toInt() ?? queueCount;
+        notifyListeners();
+        break;
+        
+      case 'match_found':
+        final match = MatchModel(
+          roomId: event['roomId'] as String,
+          targetUserId: event['targetUserId'] as String,
+          username: event['targetUserName'] as String,
+          avatarUrl: '', // Backend'den gelmiyor ise opsiyonel veya ayrı çekilir
+          movie: Movie(
+            id: (event['tmdbId'] as num).toInt(),
+            title: event['movieName'] as String,
+            overview: '',
+            releaseDate: '',
+            posterPath: '',
+            voteAverage: 0,
+            voteCount: 0,
+          ),
+          isOnline: true,
+        );
+        currentMatch = match;
+        status = MatchStatus.found;
+        isSearching = false;
+        notifyListeners();
+        break;
+
+      case 'partner_accepted':
+        // Karşı taraf kabul etti, UI'da bir belirti gösterilebilir
+        // Bizim durumumuzda sadece hem ikisi kabul ettiğinde navigation yapıyoruz
+        break;
+
+      case 'accepted':
+        status = MatchStatus.accepted;
+        notifyListeners();
+        break;
+
+      case 'both_accepted':
+        final roomId = event['roomId'] as String;
+        _completeMatchAndNavigate(roomId);
+        break;
+
+      case 'rejected':
+        rejectMatchLocal();
+        emitEffect(const ShowSnackbarEffect(
+          message: 'Eşleşme sonlandırıldı. Aramaya devam ediliyor...',
+        ));
+        break;
+
+      case 'cancelled':
+        isSearching = false;
+        status = MatchStatus.idle;
+        notifyListeners();
+        break;
+
+      case 'error':
+        setError(event['message'] as String?);
+        notifyListeners();
+        break;
+    }
   }
 
   /// Shell'den çağrılır - görünürlük değiştiğinde
@@ -57,7 +133,28 @@ class MatchScreenViewModel extends BaseViewModel {
     _isVisible = visible;
     if (visible) {
       loadWatchStatus();
+      _stopGlobalQueuePolling();
     }
+  }
+
+  /// Global kuyruk sayısını çek
+  Future<void> fetchGlobalQueueCount() async {
+    final result = await _repository.getQueueCount();
+    if (result.isSuccess) {
+      queueCount = result.data ?? 0;
+      notifyListeners();
+    }
+  }
+
+  void _startGlobalQueuePolling() {
+    _stopGlobalQueuePolling();
+    fetchGlobalQueueCount();
+    _globalQueueTimer = Timer.periodic(const Duration(seconds: 20), (_) => fetchGlobalQueueCount());
+  }
+
+  void _stopGlobalQueuePolling() {
+    _globalQueueTimer?.cancel();
+    _globalQueueTimer = null;
   }
 
   /// Shell'den çağrılır - izleme durumunu yenilemek için
@@ -89,99 +186,27 @@ class MatchScreenViewModel extends BaseViewModel {
     isLocalSearch = localSearch;
     isSearching = true;
     status = MatchStatus.searching;
-    _currentPollInterval = _minPollInterval;
     notifyListeners();
 
-    // Queue'a katıl
-    final result = await _repository.joinQueue(MatchSearchParams(
-      tmdbId: movie.id,
-      movieName: movie.title,
-      posterUrl: movie.posterPath,
-      isLocalSearch: localSearch,
-    ));
-
-    if (result.isFailure) {
-      status = MatchStatus.error;
-      setError(result.failure?.message);
-      isSearching = false;
-      notifyListeners();
-      return;
-    }
-
-    queueCount = result.data?.queueCount ?? 0;
-    notifyListeners();
-
-    // Polling başlat
-    _startPolling();
+    // WebSocket üzerinden aramayı başlat
+    _wsService.searchStart(movie.id, localOnly: localSearch);
   }
 
   /// Aramayı iptal et
   Future<void> cancelSearch() async {
-    _stopPolling();
+    if (selectedMovie != null) {
+      _wsService.cancel(selectedMovie!.id);
+    }
+    
     isSearching = false;
     selectedMovie = null;
     status = MatchStatus.idle;
     queueCount = 0;
     currentMatch = null;
     notifyListeners();
-
-    if (selectedMovie != null) {
-      await _repository.cancelMatch(selectedMovie!.id);
-    }
   }
 
-  /// Polling başlat
-  void _startPolling() {
-    _stopPolling();
-    _pollingTimer =
-        Timer.periodic(_currentPollInterval, (_) => _checkForMatch());
-  }
 
-  /// Polling durdur
-  void _stopPolling() {
-    _pollingTimer?.cancel();
-    _pollingTimer = null;
-  }
-
-  /// Eşleşme kontrolü
-  Future<void> _checkForMatch() async {
-    if (selectedMovie == null) return;
-
-    final result = await _repository.checkQueueStatus(selectedMovie!.id);
-
-    if (result.isFailure) {
-      // Hata durumunda exponential backoff
-      _increasePollInterval();
-      notifyListeners();
-      return;
-    }
-
-    final match = result.data;
-    if (match != null) {
-      // Eşleşme bulundu!
-      _stopPolling();
-      currentMatch = match;
-      status = MatchStatus.found;
-      isSearching = false;
-      notifyListeners();
-      return;
-    }
-
-    // Eşleşme yok - queue count güncelle
-    // Exponential backoff
-    _increasePollInterval();
-    notifyListeners();
-  }
-
-  /// Poll interval'ı artır (exponential backoff)
-  void _increasePollInterval() {
-    final newInterval = _currentPollInterval * 2;
-    if (newInterval <= _maxPollInterval) {
-      _currentPollInterval = newInterval;
-      // Timer'ı yeni interval ile yeniden başlat
-      _startPolling();
-    }
-  }
 
   /// Kullanıcı araması
   void onUserSearchChanged(String query) {
@@ -216,41 +241,55 @@ class MatchScreenViewModel extends BaseViewModel {
   /// Eşlemeyi kabul et
   Future<void> acceptMatch() async {
     if (currentMatch == null) return;
+    _wsService.accept(currentMatch!.roomId, currentMatch!.targetUserId);
+  }
 
-    final result = await _repository.acceptMatch(currentMatch!.roomId);
-    if (result.isSuccess) {
-      status = MatchStatus.accepted;
-      // Navigation View tarafından dinlenecek - şimdilik sadece state değiş
-      emitEffect(const ShowSnackbarEffect(
-        message: 'Eşleşme kabul edildi! Sohbet başlıyor...',
+  void _completeMatchAndNavigate(String roomId) {
+    if (currentMatch != null) {
+      final match = currentMatch!;
+      
+      // Navigate to chat
+      emitEffect(NavigateToEffect(
+        replace: false, // Normal push yapalım ki tab yapısı/ana navigator kırılmasın
+        pageBuilder: (context) => ChatDetailScreen(
+          roomId: roomId,
+          targetUserId: match.targetUserId,
+          username: match.username,
+          movieTitle: match.movie.title,
+          avatarUrl: match.avatarUrl,
+        ),
       ));
-      emitEffect(const PopEffect());
+      
+      // Reset match state after a slight delay to allow navigation to occur smoothly
+      Future.delayed(const Duration(milliseconds: 300), () {
+        currentMatch = null;
+        status = MatchStatus.idle;
+        notifyListeners();
+      });
     } else {
-      emitEffect(ShowSnackbarEffect(
-        message: result.failure?.message ?? 'Eşleşme kabul edilemedi.',
-      ));
+      status = MatchStatus.idle;
+      notifyListeners();
     }
+
+    emitEffect(const ShowSnackbarEffect(
+      message: 'Eşleşme tamamlandı! Sohbet başlıyor...',
+    ));
+  }
+  
+  
+  /// Karsı taraf reddettiginde, arama duruma getirmek
+  void rejectMatchLocal() {
+    currentMatch = null;
+    status = MatchStatus.idle; // Idle'a cekiyoruz ki modal kapansın anında
+    isSearching = false;
     notifyListeners();
   }
 
   /// Eşlemeyi reddet
   Future<void> rejectMatch() async {
     if (currentMatch == null) return;
-
-    final result = await _repository.rejectMatch(currentMatch!.roomId);
-    if (result.isSuccess) {
-      currentMatch = null;
-      status = MatchStatus.rejected;
-      // Tekrar aramaya devam et
-      isSearching = true;
-      _currentPollInterval = _minPollInterval;
-      _startPolling();
-    } else {
-      emitEffect(ShowSnackbarEffect(
-        message: result.failure?.message ?? 'Eşleşme reddedilemedi.',
-      ));
-    }
-    notifyListeners();
+    _wsService.reject(currentMatch!.roomId, currentMatch!.targetUserId);
+    rejectMatchLocal();
   }
 
   /// İzlemeye başla
@@ -285,7 +324,9 @@ class MatchScreenViewModel extends BaseViewModel {
 
   @override
   Future<void> disposeViewModel() async {
-    _stopPolling();
+    _wsSubscription?.cancel();
+    _wsService.dispose();
+    _stopGlobalQueuePolling();
     _debouncer.dispose();
     await super.disposeViewModel();
   }

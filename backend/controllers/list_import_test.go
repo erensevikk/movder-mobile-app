@@ -127,13 +127,13 @@ func TestMatchTMDBMovie_ConfidenceClassification(t *testing.T) {
 	}
 
 	exact := parsedListItem{Name: "Inception", Year: 2010}
-	matchTMDBMovie(&exact)
+	MatchTMDBMoviePublic(&exact)
 	if exact.Confidence != "exact" || exact.TmdbID == 0 {
 		t.Fatalf("expected exact match, got confidence=%s tmdb=%d", exact.Confidence, exact.TmdbID)
 	}
 
 	unresolved := parsedListItem{Name: "Totally Different", Year: 2025}
-	matchTMDBMovie(&unresolved)
+	MatchTMDBMoviePublic(&unresolved)
 	if unresolved.Confidence != "unresolved" || unresolved.TmdbID != 0 {
 		t.Fatalf("expected unresolved, got confidence=%s tmdb=%d", unresolved.Confidence, unresolved.TmdbID)
 	}

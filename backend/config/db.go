@@ -168,6 +168,15 @@ func EnsureUsersCollectionSchema() error {
 		return err
 	}
 
+	// IMPORT_JOBS — CSV yükleme görevleri için indexler
+	importJobs := db.Collection("import_jobs")
+	if _, err := importJobs.Indexes().CreateMany(ctx, []mongo.IndexModel{
+		// Kullanıcının kendi işlemleri
+		{Keys: bson.D{{Key: "userId", Value: 1}, {Key: "createdAt", Value: -1}}},
+	}); err != nil {
+		return err
+	}
+
 	return nil
 }
 

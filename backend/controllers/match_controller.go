@@ -38,10 +38,29 @@ func CheckMatch() gin.HandlerFunc {
 			return
 		}
 
+		var targetUserId, targetUserName string
+		if result.User1ID == userID {
+			targetUserId = result.User2ID
+			targetUserName = result.User2Name
+		} else {
+			targetUserId = result.User1ID
+			targetUserName = result.User1Name
+		}
+
 		c.JSON(http.StatusOK, gin.H{
 			"matched": true,
 			"message": "Eşleşme bulundu! 🎉",
-			"match":   result,
+			"match": gin.H{
+				"roomId":         result.RoomID,
+				"user1Id":        result.User1ID,
+				"user1Name":      result.User1Name,
+				"user2Id":        result.User2ID,
+				"user2Name":      result.User2Name,
+				"tmdbId":         result.TmdbID,
+				"movieName":      result.MovieName,
+				"targetUserId":   targetUserId,
+				"targetUserName": targetUserName,
+			},
 		})
 	}
 }

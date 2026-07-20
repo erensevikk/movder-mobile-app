@@ -7,6 +7,7 @@ import (
 	"movder-backend/config"
 	"movder-backend/routes"
 	"movder-backend/services"
+	"movder-backend/workers"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -36,8 +37,12 @@ func main() {
 	// Worker pool'ları başlat (goroutine fan-out öneleme)
 	config.InitWorkerPools()
 
+	// Arka plan işçilerini (Workers) başlat
+	go workers.StartCSVWorker()
+
 	// Redis tabanlı eşleşme havuzunu başlat
 	services.InitCandidatePool()
+	services.InitMatchHub()
 
 	if err := config.EnsureUsersCollectionSchema(); err != nil {
 		panic("users semasi uygulanamadi: " + err.Error())

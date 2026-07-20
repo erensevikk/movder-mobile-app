@@ -37,15 +37,6 @@ class _HomeRadarScreenState extends State<HomeRadarScreen>
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        flexibleSpace: Column(
-          children: <Widget>[
-            Container(
-              height: MediaQuery.of(context).padding.top,
-              color: const Color(0xFF0F0F0F),
-            ),
-            const Expanded(child: SizedBox.expand()),
-          ],
-        ),
         title: Container(
           height: 45,
           decoration: BoxDecoration(

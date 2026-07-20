@@ -39,6 +39,16 @@ class MatchRepositoryImpl implements repo.MatchRepository {
   }
 
   @override
+  Future<Result<int>> getQueueCount() async {
+    try {
+      final count = await ApiService.getQueueCount();
+      return Result.success(count);
+    } catch (e) {
+      return Result.failure(AppFailure(message: 'Kuyruk sayısı alınamadı: $e'));
+    }
+  }
+
+  @override
   Future<Result<MatchModel?>> checkQueueStatus(int tmdbId) async {
     try {
       final result = await ApiService.checkMatch(tmdbId);
@@ -53,12 +63,12 @@ class MatchRepositoryImpl implements repo.MatchRepository {
         );
       }
 
-      final matchedUser = result['matchedUser'];
-      if (matchedUser == null) {
+      final matchData = result['match'];
+      if (matchData == null) {
         return const Result.success(null);
       }
 
-      final roomId = result['roomId']?.toString();
+      final roomId = matchData['roomId']?.toString();
       if (roomId == null) {
         return const Result.failure(
           AppFailure(message: 'Oda ID alınamadı.'),
@@ -67,21 +77,19 @@ class MatchRepositoryImpl implements repo.MatchRepository {
 
       return Result.success(MatchModel(
         roomId: roomId,
-        targetUserId: matchedUser['userId']?.toString() ??
-            matchedUser['_id']?.toString() ??
-            '',
-        username: matchedUser['username']?.toString() ?? 'Bilinmeyen',
-        avatarUrl: matchedUser['avatarUrl']?.toString(),
+        targetUserId: matchData['targetUserId']?.toString() ?? matchData['user2Id']?.toString() ?? '',
+        username: matchData['targetUserName']?.toString() ?? matchData['user2Name']?.toString() ?? 'Bilinmeyen',
+        avatarUrl: null,
         movie: _lastMovie ??
             Movie(
               id: tmdbId,
-              title: '',
+              title: matchData['movieName']?.toString() ?? '',
               overview: '',
               releaseDate: '',
               voteAverage: 0.0,
               voteCount: 0,
             ),
-        isOnline: matchedUser['isOnline'] == true,
+        isOnline: matchData['isOnline'] == true,
       ));
     } catch (e) {
       return Result.failure(AppFailure(message: 'Hata: $e'));
@@ -99,19 +107,30 @@ class MatchRepositoryImpl implements repo.MatchRepository {
   }
 
   @override
-  Future<Result<void>> acceptMatch(String roomId) async {
+  Future<Result<Map<String, dynamic>>> acceptMatch(String roomId, String targetUserId) async {
     try {
-      // roomId'den targetUserId çıkarılabilir veya ayrı parametre gerekli
-      // Şimdilik boş bırakıyorum - çağrıdan önce doldurulmalı
       final result = await ApiService.acceptMatch(
         roomId: roomId,
-        targetUserId: '',
+        targetUserId: targetUserId,
       );
       if (result == null || result['error'] != null) {
         return const Result.failure(
           AppFailure(message: 'Eşleşme kabul edilemedi.'),
         );
       }
+      return Result.success(result);
+    } catch (e) {
+      return Result.failure(AppFailure(message: 'Hata: $e'));
+    }
+  }
+
+  @override
+  Future<Result<void>> rejectMatch(String roomId, String targetUserId) async {
+    try {
+      await ApiService.rejectMatch(
+        roomId: roomId,
+        targetUserId: targetUserId,
+      );
       return const Result.success(null);
     } catch (e) {
       return Result.failure(AppFailure(message: 'Hata: $e'));
@@ -119,13 +138,13 @@ class MatchRepositoryImpl implements repo.MatchRepository {
   }
 
   @override
-  Future<Result<void>> rejectMatch(String roomId) async {
+  Future<Result<Map<String, dynamic>>> getMatchAcceptStatus(String roomId) async {
     try {
-      await ApiService.rejectMatch(
-        roomId: roomId,
-        targetUserId: '',
-      );
-      return const Result.success(null);
+      final result = await ApiService.getMatchAcceptStatus(roomId);
+      if (result == null) {
+         return const Result.failure(AppFailure(message: 'Durum okunamadı'));
+      }
+      return Result.success(result);
     } catch (e) {
       return Result.failure(AppFailure(message: 'Hata: $e'));
     }

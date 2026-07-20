@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../../../../core/base/base_state.dart';
 import '../../../../core/mixins/view_effect_listener_mixin.dart';
 import '../../../../core/mixins/view_model_binding_mixin.dart';
+import '../../../../core/theme/app_colors.dart';
 import '../../../../shared/widgets/empty_view.dart';
 import '../../../../shared/widgets/error_view.dart';
 import '../../../../shared/widgets/loading_view.dart';
@@ -27,62 +28,135 @@ class _NotificationScreenState extends State<NotificationScreen>
   @override
   Widget buildWithViewModel(BuildContext context, NotificationsViewModel vm) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0F0F0F),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         title: const Text(
           'Bildirimler',
           style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
         ),
-        backgroundColor: const Color(0xFF1A1A1A),
+        backgroundColor: AppColors.surface,
         elevation: 0,
-        flexibleSpace: Column(
-          children: <Widget>[
-            Container(
-              height: MediaQuery.of(context).padding.top,
-              color: const Color(0xFF0F0F0F),
-            ),
-            const Expanded(child: SizedBox.expand()),
-          ],
-        ),
       ),
-      body: switch (vm.status) {
-        ViewStatus.loading => const LoadingView(),
-        ViewStatus.empty => const EmptyView(
-            title: 'Henuz bildiriminiz yok',
-            message: 'Eslesme ve mesaj hareketleri burada gorunecek.',
-          ),
-        ViewStatus.error => ErrorView(
-            message: vm.errorMessage ?? 'Bildirimler yuklenemedi.',
-            onRetry: vm.load,
-          ),
-        _ => RefreshIndicator(
-            color: Colors.redAccent,
-            backgroundColor: const Color(0xFF1E1E1E),
-            onRefresh: vm.load,
-            child: ListView.separated(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              itemCount: vm.notifications.length,
-              separatorBuilder: (_, __) => Divider(
-                  color: Colors.white.withValues(alpha: 0.05), height: 1),
-              itemBuilder: (context, index) {
-                final item = vm.notifications[index];
-                return Dismissible(
-                  key: ValueKey<String>(item.id),
-                  direction: DismissDirection.endToStart,
-                  background: Container(
-                    alignment: Alignment.centerRight,
-                    color: Colors.redAccent.withValues(alpha: 0.18),
-                    padding: const EdgeInsets.symmetric(horizontal: 24),
-                    child:
-                        const Icon(Icons.delete_outline, color: Colors.white),
+      body: !vm.isLoggedIn
+          ? _GuestNotificationView(vm: vm)
+          : switch (vm.status) {
+              ViewStatus.loading => const LoadingView(),
+              ViewStatus.empty => const EmptyView(
+                  title: 'Henüz bildiriminiz yok',
+                  message: 'Eşleşme ve mesaj hareketleri burada görünecek.',
+                ),
+              ViewStatus.error => ErrorView(
+                  message: vm.errorMessage ?? 'Bildirimler yüklenemedi.',
+                  onRetry: vm.load,
+                ),
+              _ => RefreshIndicator(
+                  color: AppColors.primary,
+                  backgroundColor: AppColors.surface,
+                  onRefresh: vm.load,
+                  child: ListView.separated(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    itemCount: vm.notifications.length,
+                    separatorBuilder: (_, __) => Divider(
+                        color: Colors.white.withValues(alpha: 0.05), height: 1),
+                    itemBuilder: (context, index) {
+                      final item = vm.notifications[index];
+                      return Dismissible(
+                        key: ValueKey<String>(item.id),
+                        direction: DismissDirection.endToStart,
+                        background: Container(
+                          alignment: Alignment.centerRight,
+                          color: AppColors.warning.withValues(alpha: 0.18),
+                          padding: const EdgeInsets.symmetric(horizontal: 24),
+                          child: const Icon(Icons.delete_outline,
+                              color: Colors.white),
+                        ),
+                        onDismissed: (_) => vm.deleteNotification(item.id),
+                        child: _NotificationTile(item: item),
+                      );
+                    },
                   ),
-                  onDismissed: (_) => vm.deleteNotification(item.id),
-                  child: _NotificationTile(item: item),
-                );
-              },
+                ),
+            },
+    );
+  }
+}
+
+class _GuestNotificationView extends StatelessWidget {
+  final NotificationsViewModel vm;
+  const _GuestNotificationView({required this.vm});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(
+          left: 32.0, right: 32.0, top: 32.0, bottom: 60.0),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: AppColors.primary.withValues(alpha: 0.1),
+                  blurRadius: 30,
+                  spreadRadius: 10,
+                )
+              ],
+            ),
+            child: const Icon(
+              Icons.notifications_off_rounded,
+              size: 64,
+              color: AppColors.primary,
             ),
           ),
-      },
+          const SizedBox(height: 106),
+          const Text(
+            'Bildirimleri Görmek İçin Giriş Yapın',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.bold,
+              color: AppColors.textHigh,
+            ),
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            'Film zevkinize uyan yeni eşleşmelerden ve mesajlardan haberdar olmak için hesabınıza giriş yapın.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 15,
+              color: AppColors.textMedium,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 40),
+          SizedBox(
+            width: double.infinity,
+            height: 56,
+            child: ElevatedButton(
+              onPressed: () => Navigator.of(context).pushNamed('/auth'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: AppColors.background,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                elevation: 0,
+              ),
+              child: const Text(
+                'Giriş Yap / Üye Ol',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -95,9 +169,9 @@ class _NotificationTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = switch (item.type) {
-      'friend_request' => Colors.blueAccent,
-      'match' => Colors.redAccent,
-      _ => Colors.white54,
+      'friend_request' => AppColors.secondary,
+      'match' => AppColors.primary,
+      _ => AppColors.textMedium,
     };
     final icon = switch (item.type) {
       'friend_request' => Icons.person_add_alt_1_rounded,
@@ -106,7 +180,7 @@ class _NotificationTile extends StatelessWidget {
     };
 
     return Container(
-      color: const Color(0xFF0F0F0F),
+      color: AppColors.background,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -116,7 +190,7 @@ class _NotificationTile extends StatelessWidget {
             height: 44,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: const Color(0xFF1E1E1E),
+              color: AppColors.surface,
               border: Border.all(color: color.withValues(alpha: 0.5)),
             ),
             child: ClipOval(
@@ -139,7 +213,9 @@ class _NotificationTile extends StatelessWidget {
                       child: Text(
                         item.title,
                         style: TextStyle(
-                          color: item.isRead ? Colors.white70 : Colors.white,
+                          color: item.isRead
+                              ? AppColors.textMedium
+                              : AppColors.textHigh,
                           fontSize: 14,
                           fontWeight: FontWeight.w700,
                         ),
@@ -149,7 +225,7 @@ class _NotificationTile extends StatelessWidget {
                     Text(
                       _formatTime(item.createdAt),
                       style: const TextStyle(
-                        color: Colors.white38,
+                        color: AppColors.textMedium,
                         fontSize: 12,
                       ),
                     ),
@@ -159,7 +235,7 @@ class _NotificationTile extends StatelessWidget {
                 Text(
                   item.message,
                   style: const TextStyle(
-                    color: Colors.white60,
+                    color: AppColors.textMedium,
                     fontSize: 13,
                     height: 1.4,
                   ),

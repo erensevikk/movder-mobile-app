@@ -14,6 +14,7 @@ import '../../../../screens/user_detail_screen.dart';
 import '../../data/models/movie_list_model.dart';
 import '../../data/models/profile_model.dart';
 import '../../data/models/watch_status_model.dart';
+import '../../data/models/match_history_model.dart';
 
 class ProfileScreenViewModel extends BaseViewModel {
   ViewStatus status = ViewStatus.initial;
@@ -21,6 +22,7 @@ class ProfileScreenViewModel extends BaseViewModel {
   ProfileModel? profile;
   WatchStatusModel? watchStatus;
   List<MovieListModel> lists = <MovieListModel>[];
+  List<MatchHistoryItemModel> matchHistoryItems = <MatchHistoryItemModel>[];
 
   @override
   Future<void> initialize() async {
@@ -33,6 +35,7 @@ class ProfileScreenViewModel extends BaseViewModel {
       profile = null;
       watchStatus = null;
       lists = <MovieListModel>[];
+      matchHistoryItems = <MatchHistoryItemModel>[];
       status = ViewStatus.content;
       notifyListeners();
       return;
@@ -46,11 +49,16 @@ class ProfileScreenViewModel extends BaseViewModel {
       profileRepository.getMyProfile(),
       profileRepository.getMyWatchStatus(),
       profileRepository.getMyLists(),
+      profileRepository.getMatchHistory(page: 1, limit: 15),
     ]);
 
     profile = results[0] as ProfileModel?;
     watchStatus = results[1] as WatchStatusModel?;
     lists = results[2] as List<MovieListModel>;
+    
+    final matchHistResp = results[3] as MatchHistoryResponse?;
+    matchHistoryItems = matchHistResp?.items ?? <MatchHistoryItemModel>[];
+
     isLoggedIn = profile != null;
     status = isLoggedIn ? ViewStatus.content : ViewStatus.empty;
     notifyListeners();

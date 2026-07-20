@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../../../../core/mixins/view_effect_listener_mixin.dart';
 import '../../../../core/mixins/view_model_binding_mixin.dart';
+import '../../../../core/theme/app_colors.dart';
 import '../../data/services/chat_repository_impl.dart';
 import '../view_models/chat_list_view_model.dart';
 
@@ -24,15 +25,17 @@ class ChatListScreenState extends State<ChatListScreen>
   @override
   Widget buildWithViewModel(BuildContext context, ChatListViewModel vm) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0F0F0F),
+      backgroundColor: AppColors.background,
       body: SafeArea(
         top: false,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: !vm.isLoggedIn
+            ? _GuestMessagesView(vm: vm)
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Container(
               height: MediaQuery.of(context).padding.top,
-              color: const Color(0xFF0F0F0F),
+              color: Colors.transparent,
             ),
             // ── Başlık Alanı ──────────────────────────────────
             _buildHeader(vm),
@@ -44,16 +47,16 @@ class ChatListScreenState extends State<ChatListScreen>
                 padding:
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 decoration: BoxDecoration(
-                  color: Colors.orangeAccent.withValues(alpha: 0.12),
+                  color: AppColors.warning.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(
-                    color: Colors.orangeAccent.withValues(alpha: 0.28),
+                    color: AppColors.warning.withValues(alpha: 0.28),
                   ),
                 ),
                 child: Row(
                   children: [
                     const Icon(Icons.wifi_off_rounded,
-                        color: Colors.orangeAccent, size: 16),
+                        color: AppColors.warning, size: 16),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
@@ -61,7 +64,7 @@ class ChatListScreenState extends State<ChatListScreen>
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                          color: Colors.white70,
+                          color: AppColors.textMedium,
                           fontSize: 12,
                           fontWeight: FontWeight.w500,
                         ),
@@ -70,7 +73,7 @@ class ChatListScreenState extends State<ChatListScreen>
                     TextButton(
                       onPressed: () => vm.loadChatRooms(),
                       child: const Text('Yenile',
-                          style: TextStyle(color: Colors.orangeAccent)),
+                          style: TextStyle(color: AppColors.warning)),
                     ),
                   ],
                 ),
@@ -84,13 +87,13 @@ class ChatListScreenState extends State<ChatListScreen>
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
                     colors: [
-                      Colors.redAccent.withValues(alpha: 0.12),
-                      Colors.redAccent.withValues(alpha: 0.04),
+                      AppColors.primary.withValues(alpha: 0.12),
+                      AppColors.primary.withValues(alpha: 0.04),
                     ],
                   ),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
-                      color: Colors.redAccent.withValues(alpha: 0.25)),
+                      color: AppColors.primary.withValues(alpha: 0.25)),
                 ),
                 child: Row(
                   children: [
@@ -98,7 +101,7 @@ class ChatListScreenState extends State<ChatListScreen>
                       width: 8,
                       height: 8,
                       decoration: const BoxDecoration(
-                        color: Colors.greenAccent,
+                        color: AppColors.success,
                         shape: BoxShape.circle,
                       ),
                     ),
@@ -106,7 +109,7 @@ class ChatListScreenState extends State<ChatListScreen>
                     Text(
                       '${vm.rooms.length} aktif sohbet',
                       style: const TextStyle(
-                        color: Colors.white70,
+                        color: AppColors.textMedium,
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
                       ),
@@ -117,13 +120,13 @@ class ChatListScreenState extends State<ChatListScreen>
                         padding: const EdgeInsets.symmetric(
                             horizontal: 8, vertical: 4),
                         decoration: BoxDecoration(
-                          color: Colors.redAccent.withValues(alpha: 0.15),
+                          color: AppColors.primary.withValues(alpha: 0.15),
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: Text(
                           '${vm.totalUnreadCount} okunmamış',
                           style: const TextStyle(
-                            color: Colors.redAccent,
+                            color: AppColors.primary,
                             fontSize: 11,
                             fontWeight: FontWeight.bold,
                           ),
@@ -156,10 +159,11 @@ class ChatListScreenState extends State<ChatListScreen>
                 ? TextField(
                     controller: vm.searchController,
                     autofocus: true,
-                    style: const TextStyle(color: Colors.white, fontSize: 16),
+                    style: const TextStyle(
+                        color: AppColors.textHigh, fontSize: 16),
                     decoration: const InputDecoration(
                       hintText: 'Sohbetlerde ara...',
-                      hintStyle: TextStyle(color: Colors.white38),
+                      hintStyle: TextStyle(color: AppColors.textMedium),
                       border: InputBorder.none,
                     ),
                   )
@@ -170,12 +174,12 @@ class ChatListScreenState extends State<ChatListScreen>
                           style: Theme.of(context)
                               .textTheme
                               .headlineLarge
-                              ?.copyWith(color: Colors.white)),
+                              ?.copyWith(color: AppColors.textHigh)),
                       const SizedBox(height: 4),
                       const Text(
                         'Eşleşmelerinden gelen mesajlar',
                         style: TextStyle(
-                          color: Colors.white60,
+                          color: AppColors.textMedium,
                           fontSize: 12,
                           fontWeight: FontWeight.w500,
                         ),
@@ -190,13 +194,13 @@ class ChatListScreenState extends State<ChatListScreen>
               width: 42,
               height: 42,
               decoration: BoxDecoration(
-                color: const Color(0xFF1E1E1E),
+                color: AppColors.surface,
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.white12),
+                border: Border.all(color: AppColors.divider),
               ),
               child: Icon(
                 vm.isSearching ? Icons.close_rounded : Icons.search_rounded,
-                color: Colors.white54,
+                color: AppColors.textMedium,
                 size: 22,
               ),
             ),
@@ -209,7 +213,7 @@ class ChatListScreenState extends State<ChatListScreen>
   Widget _buildBody(ChatListViewModel vm) {
     if (vm.isLoading && vm.rooms.isEmpty) {
       return const Center(
-        child: CircularProgressIndicator(color: Colors.redAccent),
+        child: CircularProgressIndicator(color: AppColors.primary),
       );
     }
 
@@ -221,21 +225,22 @@ class ChatListScreenState extends State<ChatListScreen>
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               const Icon(Icons.error_outline_rounded,
-                  color: Colors.orangeAccent, size: 38),
+                  color: AppColors.warning, size: 38),
               const SizedBox(height: 10),
               Text(
                 vm.error ?? 'Sohbetler yüklenemedi.',
                 textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.white70, fontSize: 13),
+                style:
+                    const TextStyle(color: AppColors.textMedium, fontSize: 13),
               ),
               const SizedBox(height: 14),
               ElevatedButton(
                 onPressed: vm.loadChatRooms,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.redAccent,
+                  backgroundColor: AppColors.primary,
                 ),
                 child: const Text('Tekrar Dene',
-                    style: TextStyle(color: Colors.white)),
+                    style: TextStyle(color: AppColors.textHigh)),
               ),
             ],
           ),
@@ -247,7 +252,7 @@ class ChatListScreenState extends State<ChatListScreen>
 
     if (displayedRooms.isEmpty) {
       return RefreshIndicator(
-        color: Colors.redAccent,
+        color: AppColors.primary,
         onRefresh: vm.onRefresh,
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
@@ -258,7 +263,7 @@ class ChatListScreenState extends State<ChatListScreen>
                 vm.isSearching
                     ? 'Aradığınız kişiyle sohbet bulunamadı.'
                     : 'Henüz hiç eşleşmen veya sohbetin yok.',
-                style: const TextStyle(color: Colors.white54),
+                style: const TextStyle(color: AppColors.textMedium),
               ),
             ),
             if (vm.isLoading) ...[
@@ -269,7 +274,7 @@ class ChatListScreenState extends State<ChatListScreen>
                   height: 18,
                   child: CircularProgressIndicator(
                     strokeWidth: 2,
-                    color: Colors.redAccent,
+                    color: AppColors.primary,
                   ),
                 ),
               ),
@@ -280,7 +285,7 @@ class ChatListScreenState extends State<ChatListScreen>
     }
 
     return RefreshIndicator(
-      color: Colors.redAccent,
+      color: AppColors.primary,
       onRefresh: vm.onRefresh,
       child: Stack(
         children: [
@@ -291,7 +296,7 @@ class ChatListScreenState extends State<ChatListScreen>
             separatorBuilder: (_, __) => Padding(
               padding: const EdgeInsets.symmetric(vertical: 4),
               child: Divider(
-                color: Colors.white.withValues(alpha: 0.06),
+                color: AppColors.textHigh.withValues(alpha: 0.06),
                 height: 1,
               ),
             ),
@@ -322,9 +327,9 @@ class ChatListScreenState extends State<ChatListScreen>
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF1A1A1A),
+                  color: AppColors.surface,
                   borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: Colors.white12),
+                  border: Border.all(color: AppColors.divider),
                 ),
                 child: const Row(
                   mainAxisSize: MainAxisSize.min,
@@ -334,13 +339,14 @@ class ChatListScreenState extends State<ChatListScreen>
                       height: 12,
                       child: CircularProgressIndicator(
                         strokeWidth: 2,
-                        color: Colors.redAccent,
+                        color: AppColors.primary,
                       ),
                     ),
                     SizedBox(width: 6),
                     Text(
                       'Yenileniyor',
-                      style: TextStyle(color: Colors.white60, fontSize: 11),
+                      style:
+                          TextStyle(color: AppColors.textMedium, fontSize: 11),
                     ),
                   ],
                 ),
@@ -401,12 +407,14 @@ class _ChatCard extends StatelessWidget {
         margin: const EdgeInsets.symmetric(vertical: 6),
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: hasUnread ? const Color(0xFF1A1A1A) : const Color(0xFF141414),
+          color: hasUnread
+              ? AppColors.surface
+              : AppColors.background.withValues(alpha: 0.7),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
             color: hasUnread
-                ? Colors.redAccent.withValues(alpha: 0.2)
-                : Colors.white.withValues(alpha: 0.06),
+                ? AppColors.primary.withValues(alpha: 0.2)
+                : AppColors.textHigh.withValues(alpha: 0.06),
           ),
         ),
         child: Row(
@@ -421,11 +429,11 @@ class _ChatCard extends StatelessWidget {
                     shape: BoxShape.circle,
                     border: Border.all(
                       color: hasUnread
-                          ? Colors.redAccent.withValues(alpha: 0.5)
-                          : Colors.white24,
+                          ? AppColors.primary.withValues(alpha: 0.5)
+                          : AppColors.textHigh.withValues(alpha: 0.24),
                       width: 2,
                     ),
-                    color: const Color(0xFF1E1E1E),
+                    color: AppColors.surface,
                   ),
                   child: ClipOval(
                     child: (avatarUrl != null && avatarUrl!.trim().isNotEmpty)
@@ -435,19 +443,19 @@ class _ChatCard extends StatelessWidget {
                             placeholder: (_, __) => const Center(
                               child: Icon(
                                 Icons.person,
-                                color: Colors.white38,
+                                color: AppColors.textMedium,
                                 size: 28,
                               ),
                             ),
                             errorWidget: (_, __, ___) => const Icon(
                               Icons.person,
-                              color: Colors.white54,
+                              color: AppColors.textMedium,
                               size: 28,
                             ),
                           )
                         : const Icon(
                             Icons.person,
-                            color: Colors.white54,
+                            color: AppColors.textMedium,
                             size: 28,
                           ),
                   ),
@@ -460,10 +468,10 @@ class _ChatCard extends StatelessWidget {
                       width: 14,
                       height: 14,
                       decoration: BoxDecoration(
-                        color: Colors.greenAccent,
+                        color: AppColors.success,
                         shape: BoxShape.circle,
                         border: Border.all(
-                          color: const Color(0xFF0F0F0F),
+                          color: AppColors.background,
                           width: 2.5,
                         ),
                       ),
@@ -489,7 +497,7 @@ class _ChatCard extends StatelessWidget {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
-                            color: Colors.white,
+                            color: AppColors.textHigh,
                             fontSize: 15,
                             fontWeight:
                                 hasUnread ? FontWeight.bold : FontWeight.w600,
@@ -500,7 +508,9 @@ class _ChatCard extends StatelessWidget {
                       Text(
                         time,
                         style: TextStyle(
-                          color: hasUnread ? Colors.redAccent : Colors.white38,
+                          color: hasUnread
+                              ? AppColors.primary
+                              : AppColors.textMedium,
                           fontSize: 12,
                           fontWeight:
                               hasUnread ? FontWeight.w600 : FontWeight.normal,
@@ -518,10 +528,10 @@ class _ChatCard extends StatelessWidget {
                         padding: const EdgeInsets.symmetric(
                             horizontal: 8, vertical: 4),
                         decoration: BoxDecoration(
-                          color: Colors.redAccent.withValues(alpha: 0.16),
+                          color: AppColors.primary.withValues(alpha: 0.16),
                           borderRadius: BorderRadius.circular(8),
                           border: Border.all(
-                            color: Colors.redAccent.withValues(alpha: 0.28),
+                            color: AppColors.primary.withValues(alpha: 0.28),
                           ),
                         ),
                         child: Row(
@@ -530,7 +540,7 @@ class _ChatCard extends StatelessWidget {
                             const Icon(
                               Icons.movie,
                               size: 12,
-                              color: Colors.redAccent,
+                              color: AppColors.primary,
                             ),
                             const SizedBox(width: 4),
                             Text(
@@ -538,7 +548,7 @@ class _ChatCard extends StatelessWidget {
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
-                                color: Colors.redAccent,
+                                color: AppColors.primary,
                                 fontSize: 11,
                                 fontWeight: FontWeight.w600,
                               ),
@@ -560,7 +570,9 @@ class _ChatCard extends StatelessWidget {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
-                            color: hasUnread ? Colors.white70 : Colors.white38,
+                            color: hasUnread
+                                ? AppColors.textHigh
+                                : AppColors.textMedium,
                             fontSize: 13,
                             fontWeight:
                                 hasUnread ? FontWeight.w500 : FontWeight.normal,
@@ -573,14 +585,14 @@ class _ChatCard extends StatelessWidget {
                           width: 22,
                           height: 22,
                           decoration: const BoxDecoration(
-                            color: Colors.redAccent,
+                            color: AppColors.primary,
                             shape: BoxShape.circle,
                           ),
                           child: Center(
                             child: Text(
                               unreadCount.toString(),
                               style: const TextStyle(
-                                color: Colors.white,
+                                color: AppColors.textHigh,
                                 fontSize: 11,
                                 fontWeight: FontWeight.bold,
                               ),
@@ -650,7 +662,9 @@ class _SwipeToDeleteChatItemState extends State<_SwipeToDeleteChatItem> {
               child: Container(
                 margin: const EdgeInsets.symmetric(vertical: 6),
                 decoration: BoxDecoration(
-                  color: Colors.redAccent.withValues(alpha: 0.9),
+                  color: _offsetX < -1
+                      ? AppColors.primary.withValues(alpha: 0.9)
+                      : Colors.transparent,
                   borderRadius: BorderRadius.circular(16),
                 ),
                 child: Align(
@@ -658,12 +672,17 @@ class _SwipeToDeleteChatItemState extends State<_SwipeToDeleteChatItem> {
                   child: SizedBox(
                     width: _maxReveal,
                     child: Center(
-                      child: IconButton(
-                        icon: const Icon(Icons.delete, color: Colors.white),
-                        onPressed: () {
-                          widget.onDelete();
-                        },
-                      ),
+                      child: _offsetX < -8
+                          ? IconButton(
+                              icon: const Icon(
+                                Icons.delete,
+                                color: AppColors.textHigh,
+                              ),
+                              onPressed: () {
+                                widget.onDelete();
+                              },
+                            )
+                          : const SizedBox.shrink(),
                     ),
                   ),
                 ),
@@ -696,6 +715,86 @@ class _SwipeToDeleteChatItemState extends State<_SwipeToDeleteChatItem> {
           ],
         );
       },
+    );
+  }
+}
+
+class _GuestMessagesView extends StatelessWidget {
+  final ChatListViewModel vm;
+  const _GuestMessagesView({required this.vm});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(
+          left: 32.0, right: 32.0, top: 32.0, bottom: 60.0),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: AppColors.primary.withValues(alpha: 0.1),
+                  blurRadius: 30,
+                  spreadRadius: 10,
+                )
+              ],
+            ),
+            child: const Icon(
+              Icons.chat_bubble_outline_rounded,
+              size: 64,
+              color: AppColors.primary,
+            ),
+          ),
+          const SizedBox(height: 106),
+          const Text(
+            'Mesajları Görmek İçin Giriş Yapın',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.bold,
+              color: AppColors.textHigh,
+            ),
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            'Eşleştiğiniz kişilerle sohbete başlamak ve mesajları okumak için hesabınıza giriş yapın.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 15,
+              color: AppColors.textMedium,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 40),
+          SizedBox(
+            width: double.infinity,
+            height: 56,
+            child: ElevatedButton(
+              onPressed: () => Navigator.of(context).pushNamed('/auth'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: AppColors.background,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                elevation: 0,
+              ),
+              child: const Text(
+                'Giriş Yap / Üye Ol',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

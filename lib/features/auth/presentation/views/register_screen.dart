@@ -1,8 +1,11 @@
-import 'package:flutter/material.dart';
+import 'dart:ui';
 
+import 'package:flutter/gestures.dart';
+import 'package:flutter/material.dart';
 import '../../../../core/mixins/view_effect_listener_mixin.dart';
 import '../../../../core/mixins/view_model_binding_mixin.dart';
 import '../../../../core/utils/turkish_cities.dart';
+import '../../../../core/utils/legal_texts.dart';
 import '../../../../shared/widgets/app_button.dart';
 import '../../../../shared/widgets/app_text_field.dart';
 import '../view_models/register_view_model.dart';
@@ -99,6 +102,222 @@ class _RegisterScreenState extends State<RegisterScreen>
     setState(() {
       _selectedCity = selected;
     });
+  }
+
+  void _showKVKKModal() {
+    showGeneralDialog(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'KVKK',
+      barrierColor: Colors.black.withValues(alpha: 0.5),
+      transitionDuration: const Duration(milliseconds: 300),
+      transitionBuilder: (context, anim, secondAnim, child) {
+        return FadeTransition(
+          opacity: anim,
+          child: ScaleTransition(
+            scale: CurvedAnimation(parent: anim, curve: Curves.easeOutCubic),
+            child: child,
+          ),
+        );
+      },
+      pageBuilder: (context, anim, secondAnim) {
+        return Center(
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+            child: Container(
+              width: MediaQuery.of(context).size.width * 0.85,
+              height: MediaQuery.of(context).size.height * 0.65,
+              decoration: BoxDecoration(
+                color: const Color(0xFF1A1A1A),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.08),
+                ),
+              ),
+              child: Material(
+                color: Colors.transparent,
+                child: Padding(
+                  padding: const EdgeInsets.all(20.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Expanded(
+                            child: Text(
+                              'KVKK Aydınlatma Metni',
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                          GestureDetector(
+                            onTap: () => Navigator.pop(context),
+                            child: Container(
+                              padding: const EdgeInsets.all(4),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.1),
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(Icons.close,
+                                  color: Colors.white70, size: 20),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      Expanded(
+                        child: StatefulBuilder(
+                          builder: (context, _) {
+                            final scrollController = ScrollController();
+                            return Scrollbar(
+                              controller: scrollController,
+                              thumbVisibility: true,
+                              interactive: true,
+                              child: SingleChildScrollView(
+                                controller: scrollController,
+                                child: const Text(
+                                  LegalTexts.kvkkText,
+                                  style: TextStyle(
+                                      color: Colors.white70, fontSize: 14),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      ElevatedButton(
+                        onPressed: () => Navigator.pop(context),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.redAccent,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12)),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                        ),
+                        child: const Text('Anladım',
+                            style: TextStyle(color: Colors.white)),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showTermsModal() {
+    showGeneralDialog(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'Terms',
+      barrierColor: Colors.black.withValues(alpha: 0.5),
+      transitionDuration: const Duration(milliseconds: 300),
+      transitionBuilder: (context, anim, secondAnim, child) {
+        return FadeTransition(
+          opacity: anim,
+          child: ScaleTransition(
+            scale: CurvedAnimation(parent: anim, curve: Curves.easeOutCubic),
+            child: child,
+          ),
+        );
+      },
+      pageBuilder: (context, anim, secondAnim) {
+        return Center(
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+            child: Container(
+              width: MediaQuery.of(context).size.width * 0.85,
+              height: MediaQuery.of(context).size.height * 0.65,
+              decoration: BoxDecoration(
+                color: const Color(0xFF1A1A1A),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.08),
+                ),
+              ),
+              child: Material(
+                color: Colors.transparent,
+                child: Padding(
+                  padding: const EdgeInsets.all(20.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Expanded(
+                            child: Text(
+                              'Kullanım Şartları',
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                          GestureDetector(
+                            onTap: () => Navigator.pop(context),
+                            child: Container(
+                              padding: const EdgeInsets.all(4),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.1),
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(Icons.close,
+                                  color: Colors.white70, size: 20),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      Expanded(
+                        child: StatefulBuilder(
+                          builder: (context, _) {
+                            final scrollController = ScrollController();
+                            return Scrollbar(
+                              controller: scrollController,
+                              thumbVisibility: true,
+                              interactive: true,
+                              child: SingleChildScrollView(
+                                controller: scrollController,
+                                child: const Text(
+                                  LegalTexts.termsText,
+                                  style: TextStyle(
+                                      color: Colors.white70, fontSize: 14),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      ElevatedButton(
+                        onPressed: () => Navigator.pop(context),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.redAccent,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12)),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                        ),
+                        child: const Text('Anladım',
+                            style: TextStyle(color: Colors.white)),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 
   @override
@@ -232,9 +451,21 @@ class _RegisterScreenState extends State<RegisterScreen>
                 contentPadding: EdgeInsets.zero,
                 value: _kvkkApproved,
                 activeColor: Colors.redAccent,
-                title: const Text(
-                  'KVKK metnini okudum ve onaylıyorum.',
-                  style: TextStyle(color: Colors.white70, fontSize: 13),
+                title: RichText(
+                  text: TextSpan(
+                    style: const TextStyle(color: Colors.white70, fontSize: 13),
+                    children: [
+                      TextSpan(
+                        text: 'KVKK',
+                        style: const TextStyle(
+                          color: Colors.redAccent,
+                          decoration: TextDecoration.underline,
+                        ),
+                        recognizer: TapGestureRecognizer()..onTap = _showKVKKModal,
+                      ),
+                      const TextSpan(text: ' metnini okudum ve onaylıyorum.'),
+                    ],
+                  ),
                 ),
                 subtitle: vm.kvkkError == null
                     ? null
@@ -254,9 +485,21 @@ class _RegisterScreenState extends State<RegisterScreen>
                 contentPadding: EdgeInsets.zero,
                 value: _termsApproved,
                 activeColor: Colors.redAccent,
-                title: const Text(
-                  'Kullanım şartlarını kabul ediyorum.',
-                  style: TextStyle(color: Colors.white70, fontSize: 13),
+                title: RichText(
+                  text: TextSpan(
+                    style: const TextStyle(color: Colors.white70, fontSize: 13),
+                    children: [
+                      TextSpan(
+                        text: 'Kullanım şartlarını',
+                        style: const TextStyle(
+                          color: Colors.redAccent,
+                          decoration: TextDecoration.underline,
+                        ),
+                        recognizer: TapGestureRecognizer()..onTap = _showTermsModal,
+                      ),
+                      const TextSpan(text: ' kabul ediyorum.'),
+                    ],
+                  ),
                 ),
                 subtitle: vm.termsError == null
                     ? null

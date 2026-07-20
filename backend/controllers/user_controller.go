@@ -9,6 +9,7 @@ import (
 	"movder-backend/models"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -967,6 +968,94 @@ func UpdateNotificationSettings() gin.HandlerFunc {
 		c.JSON(http.StatusOK, gin.H{
 			"message":              "Bildirim ayarları güncellendi",
 			"notificationSettings": input,
+		})
+	}
+}
+
+// GetMatchHistory returns the match history of the current user with pagination.
+// Supports ?page=1&limit=20
+func GetMatchHistory() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		userIDHex := c.GetString("userId")
+		userID, err := primitive.ObjectIDFromHex(userIDHex)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Geçersiz kullanıcı kimliği!"})
+			return
+		}
+
+		pageStr := c.DefaultQuery("page", "1")
+		limitStr := c.DefaultQuery("limit", "20")
+
+		page := 1
+		limit := 20
+		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+			page = p
+		}
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 50 {
+			limit = l
+		}
+
+		userCollection := config.GetCollection(config.DB, "users")
+
+		pipeline := mongo.Pipeline{
+			bson.D{{"$match", bson.M{"_id": userID}}},
+			bson.D{{"$unwind", "$match_history"}},
+			bson.D{{"$sort", bson.M{"match_history.matched_at": -1}}},
+			bson.D{{"$skip", (page - 1) * limit}},
+			bson.D{{"$limit", limit}},
+			bson.D{{"$lookup", bson.M{
+				"from":         "users",
+				"localField":   "match_history.matched_user_id",
+				"foreignField": "_id",
+				"as":           "matched_user_info",
+			}}},
+			bson.D{{"$unwind", bson.M{
+				"path":                       "$matched_user_info",
+				"preserveNullAndEmptyArrays": true,
+			}}},
+			bson.D{{"$project", bson.M{
+				"_id":            0,
+				"matchedUserId":  "$match_history.matched_user_id",
+				"tmdbId":         "$match_history.tmdb_id",
+				"movieName":      "$match_history.movie_name",
+				"matchedAt":      "$match_history.matched_at",
+				"username":       "$matched_user_info.username",
+				"avatarUrl":      "$matched_user_info.avatar_url",
+			}}},
+		}
+
+		cursor, err := userCollection.Aggregate(ctx, pipeline)
+		if err != nil {
+			log.Printf("[MatchHistory] Error aggregating: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Eşleşme geçmişi alınamadı."})
+			return
+		}
+		defer cursor.Close(ctx)
+
+		var results []bson.M
+		if err := cursor.All(ctx, &results); err != nil {
+			log.Printf("[MatchHistory] Error parsing: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Geçmiş verileri okunamadı."})
+			return
+		}
+
+		if results == nil {
+			results = []bson.M{}
+		}
+
+		for _, item := range results {
+			if matchedID, ok := item["matchedUserId"].(primitive.ObjectID); ok {
+				item["matchedUserId"] = matchedID.Hex()
+			}
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"page":  page,
+			"limit": limit,
+			"items": results,
 		})
 	}
 }

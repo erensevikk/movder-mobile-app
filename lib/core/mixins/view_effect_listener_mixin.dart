@@ -27,7 +27,8 @@ mixin ViewEffectListenerMixin<T extends StatefulWidget,
       }
 
       if (effect is NavigateToEffect) {
-        final route = MaterialPageRoute(builder: effect.pageBuilder);
+        final route = MaterialPageRoute<Object?>(builder: effect.pageBuilder);
+        Object? poppedResult;
         if (effect.clearStack) {
           await Navigator.of(context).pushAndRemoveUntil(route, (_) => false);
           return;
@@ -36,7 +37,8 @@ mixin ViewEffectListenerMixin<T extends StatefulWidget,
           await Navigator.of(context).pushReplacement(route);
           return;
         }
-        await Navigator.of(context).push(route);
+        poppedResult = await Navigator.of(context).push<Object?>(route);
+        effect.onPopped?.call(poppedResult);
         return;
       }
 

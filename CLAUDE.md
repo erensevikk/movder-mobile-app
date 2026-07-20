@@ -119,7 +119,7 @@ Toplam altyapı maliyeti hedefi: **0 TL** (ücretsiz katmanlar).
 
 | Katman               | Teknoloji        | Neden?                                                                                           |
 |----------------------|------------------|--------------------------------------------------------------------------------------------------|
-| Ana Sunucu (API)     | **Go (Golang)**  | Goroutine tabanlı mükemmel eşzamanlılık. Binlerce eşzamanlı eşleşme isteğini düşük bellek tüketimiyle karşılar. |
+| Ana Sunucu (API)     | **Go (Golang) + Gin** | Gin framework üzerine kurulu, goroutine tabanlı mükemmel eşzamanlılık. Binlerce eşzamanlı eşleşme isteğini düşük bellek tüketimiyle karşılar. |
 | Mesaj / Görev Kuyruğu | **RabbitMQ**     | Eşleşme arayanları sıraya sokan, doğru kişileri bağlayan ve chat mesajlarını kayıpsız ileten trafik polisi. |
 | Hızlı Bellek (Cache) | **Redis**        | Canlı sayaçlar, "Online" durumları ve kısa ömürlü oturum verilerini veritabanını yormadan RAM üzerinde tutar. |
 | Kalıcı Veritabanı    | **MongoDB (NoSQL)** | TMDB'den gelen karmaşık JSON film verileri, esnek chat geçmişleri ve devasa izleme listelerini rahat saklama. |
@@ -135,7 +135,7 @@ Toplam altyapı maliyeti hedefi: **0 TL** (ücretsiz katmanlar).
 
 | Araç                    | Rolü                                                                 |
 |-------------------------|----------------------------------------------------------------------|
-| **Docker & Docker Compose** | Tüm backend altyapısını (Go, RabbitMQ, Redis, MongoDB) tek komutla ayağa kaldırır. |
+| **Docker Compose** (`backend/docker-compose.yml`) | Backend altyapısını (MongoDB, Redis, RabbitMQ) tek komutla ayağa kaldırır. Go sunucusu şu an Docker dışında, doğrudan çalıştırılır. |
 | **Oracle Cloud (Always Free)** | Docker konteynerlerini 7/24 internete açık tutan, ömür boyu ücretsiz bulut sunucusu. |
 
 ---
@@ -143,7 +143,7 @@ Toplam altyapı maliyeti hedefi: **0 TL** (ücretsiz katmanlar).
 ## 🔄 Sistemin İşleyiş Senaryosu (User Flow)
 
 ```
-1. Kullanıcı Flutter uygulamasını açar → Google ile giriş yapar.
+1. Kullanıcı Flutter uygulamasını açar → E-posta ve şifre ile kayıt olur / giriş yapar (JWT tabanlı auth).
 
 2. (Opsiyonel) Letterboxd CSV yükler → Backend parse eder → MongoDB'ye yazar
    → Profil anında dolu ve şık görünür.
@@ -168,35 +168,63 @@ Toplam altyapı maliyeti hedefi: **0 TL** (ücretsiz katmanlar).
 
 ## 📁 Proje Yapısı (Genel Harita)
 
-> *Proje henüz geliştirme aşamasındadır. Aşağıdaki yapı hedeflenen mimariyi
-> yansıtır ve geliştirme ilerledikçe güncellenecektir.*
-
 ```
-MovDate/
-├── mobile/                    # Flutter (Dart) — Mobil uygulama
-│   ├── lib/
-│   │   ├── screens/           # Ana ekranlar (home, profile, chat, match)
-│   │   ├── widgets/           # Yeniden kullanılabilir UI bileşenleri
-│   │   ├── services/          # API ve WebSocket servisleri
-│   │   ├── models/            # Veri modelleri
-│   │   └── providers/         # State management
-│   └── pubspec.yaml
+Movder/                          # Proje kök dizini (aynı zamanda Flutter projesi)
+├── lib/                         # Flutter (Dart) — Mobil uygulama kaynak kodu
+│   ├── main.dart                # Uygulama giriş noktası → bootstrap()
+│   ├── app/                     # Uygulama kabuğu ve DI
+│   │   ├── bootstrap.dart       # Servislerin başlatılması
+│   │   ├── app.dart             # MovderApp — MaterialApp root widget
+│   │   ├── app_scope.dart       # Manuel Dependency Injection (Singleton)
+│   │   ├── app_shell_screen.dart # BottomNavigationBar ile ana navigasyon
+│   │   └── app_shell_view_model.dart
+│   ├── core/                    # Çekirdek altyapı
+│   │   ├── base/                # BaseViewModel, Result, AppFailure
+│   │   ├── mixins/              # LoadingStateMixin
+│   │   ├── network/             # ApiClient (HTTP katmanı)
+│   │   ├── services/            # AuthStorageService, MediaPickerService
+│   │   ├── theme/               # AppColors, AppTheme
+│   │   └── utils/               # Yardımcı fonksiyonlar
+│   ├── features/                # Feature-based modüler mimari (MVVM)
+│   │   ├── auth/                # Kayıt & Giriş (email/password + JWT)
+│   │   ├── home/                # Ana ekran — Eşleşme radarı
+│   │   ├── match/               # Eşleşme motoru arayüzü
+│   │   ├── chat/                # Sohbet listesi ve detay
+│   │   ├── profile/             # Profil, kullanıcı detay, Letterboxd import
+│   │   ├── movies/              # Film detay ekranı
+│   │   ├── lists/               # Film listeleri (oluşturma, detay)
+│   │   ├── notifications/       # Bildirim ekranı
+│   │   └── settings/            # Ayarlar (hesap, gizlilik, bildirim, şifre)
+│   │   # Her feature modülü şu yapıdadır:
+│   │   #   data/
+│   │   #     ├── repositories/   # Abstract repository interface
+│   │   #     └── services/       # Repository implementasyonu
+│   │   #   presentation/
+│   │   #     ├── views/          # Ekran widget'ları
+│   │   #     └── view_models/    # ChangeNotifier tabanlı ViewModel'ler
+│   ├── models/                  # Paylaşılan veri modelleri (movie.dart)
+│   ├── screens/                 # Eski ekranlar (kademeli olarak features/'a taşınıyor)
+│   ├── services/                # Eski servisler (api_service, chat_service vs.)
+│   └── shared/                  # Paylaşılan widget'lar ve modeller
+│       ├── models/              # AppUser vb.
+│       └── widgets/             # AppButton, AppTextField, EmptyView, ErrorView, LoadingView
+├── pubspec.yaml
 │
-├── backend/                   # Go (Golang) — API Sunucusu
-│   ├── cmd/                   # Uygulama giriş noktaları
-│   ├── internal/
-│   │   ├── api/               # HTTP handler'lar ve route'lar
-│   │   ├── matchmaking/       # Eşleşme motoru (RabbitMQ entegrasyonu)
-│   │   ├── chat/              # WebSocket chat yönetimi
-│   │   ├── user/              # Kullanıcı işlemleri ve profil
-│   │   ├── tmdb/              # TMDB API istemcisi
-│   │   └── csv/               # Letterboxd CSV parser
+├── backend/                     # Go (Golang) + Gin — API Sunucusu
+│   ├── main.go                  # Backend giriş noktası (Gin router setup)
+│   ├── config/                  # Veritabanı bağlantıları, env, RabbitMQ manager, Redis, worker pool
+│   ├── controllers/             # HTTP handler'lar (user, chat, match, friend, list, status, tmdb, notification, privacy)
+│   ├── routes/                  # Route tanımlamaları (userRoutes, chatRoutes, matchRoutes vb.)
+│   ├── services/                # İş mantığı (matchmaking.go, tmdb.go)
+│   ├── models/                  # Go veri modelleri (user, friend, list, status, import_job)
+│   ├── middleware/              # Auth middleware (JWT doğrulama)
+│   ├── workers/                 # Arka plan işçileri (csv_worker.go)
+│   ├── uploads/                 # Yüklenen dosyalar
+│   ├── docker-compose.yml       # MongoDB, Redis, RabbitMQ konteynerlerini ayağa kaldırır
 │   ├── go.mod
 │   └── go.sum
 │
-├── docker-compose.yml         # Tüm backend servislerini (Go, RabbitMQ, Redis, MongoDB) ayağa kaldırır
-├── Dockerfile                 # Go uygulaması için çok aşamalı build
-├── CLAUDE.md                  # Bu dosya — Proje rehberi
+├── CLAUDE.md                    # Bu dosya — Proje rehberi
 └── README.md
 ```
 
@@ -220,7 +248,7 @@ MovDate/
 3. MongoDB sorgularında gerekli **indeksleri** oluştur.
 4. Redis key'lerinde tutarlı **prefix** ve **TTL** kullan.
 5. RabbitMQ kuyruklarında **dead-letter** stratejisi uygula.
-6. Flutter tarafında state yönetimini merkezi tut (Provider/Riverpod).
+6. Flutter tarafında state yönetimini merkezi tut (MVVM: ChangeNotifier + BaseViewModel + AppScope).
 7. Docker Compose ile lokal geliştirme ortamını tek komutla ayağa kaldır.
 8. Sorulara çözüm önerisi uygularken **overengineering yapma**, sorunu önce iyice anla.
 9. "Bu sorunu nasıl çözeriz?" gibi sorularda **öneri sun, doğrudan uygulamaya geçme**.
@@ -230,6 +258,6 @@ MovDate/
 
 ## 📝 Güncellik
 
-**Son güncelleme:** 2026-02-25
+**Son güncelleme:** 2026-04-14
 
 Önemli mimari değişiklikler yapıldığında bu dosyayı güncellemeyi unutma!

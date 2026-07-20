@@ -118,6 +118,7 @@ func GetChatRoomsOptimized() gin.HandlerFunc {
 					"unmatchedBy":   1,
 					"lastMessage":   bson.M{"$arrayElemAt": bson.A{"$lastMessageData.content", 0}},
 					"lastTimestamp": bson.M{"$arrayElemAt": bson.A{"$lastMessageData.timestamp", 0}},
+					"lastSenderId":  bson.M{"$arrayElemAt": bson.A{"$lastMessageData.senderId", 0}},
 					"unreadCount":   bson.M{"$arrayElemAt": bson.A{"$unreadData.count", 0}},
 				},
 			},
@@ -160,7 +161,11 @@ func GetChatRoomsOptimized() gin.HandlerFunc {
 			status, _ := room["status"].(string)
 			unmatchedBy, _ := room["unmatchedBy"].(string)
 			lastMessage, _ := room["lastMessage"].(string)
+			lastSenderID, _ := room["lastSenderId"].(string)
 			lastTimestamp, _ := room["lastTimestamp"].(int64)
+			if strings.TrimSpace(lastMessage) != "" && lastSenderID == userId {
+				lastMessage = "Sen: " + lastMessage
+			}
 
 			entry := map[string]interface{}{
 				"roomId":        room["roomId"],
@@ -173,6 +178,7 @@ func GetChatRoomsOptimized() gin.HandlerFunc {
 				"unreadCount":   unreadCount,
 				"lastMessage":   lastMessage,
 				"lastTimestamp": lastTimestamp,
+				"lastSenderId":  lastSenderID,
 				"status":        status,
 				"unmatchedBy":   unmatchedBy,
 			}
@@ -241,6 +247,9 @@ func GetChatMessagesPaginated() gin.HandlerFunc {
 			errorResponse(c, http.StatusForbidden, "FORBIDDEN", "Bu odaya erişim yetkiniz yok", nil)
 			return
 		}
+
+		// Mesajlar açıldığında read statüsünü güncelle
+		markMessagesAsRead(roomID, userId)
 
 		// Filtre oluştur
 		msgFilter := bson.M{

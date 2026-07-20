@@ -245,6 +245,29 @@ class ApiService {
     }
   }
 
+  /// Kullanıcının eşleşme geçmişini getirir
+  static Future<Map<String, dynamic>?> getMatchHistory({int page = 1, int limit = 20}) async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return null;
+
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/api/profile/match-history?page=$page&limit=$limit'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Profil bilgilerini (açıklama ve/veya avatar) günceller
   static Future<Map<String, dynamic>?> updateProfile({
     String? description,
@@ -832,6 +855,30 @@ class ApiService {
     }
   }
 
+  /// Aktif eşleşen/bekleyen genel kuyruk sayısını alır
+  static Future<int> getQueueCount() async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return 0;
+
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/api/match/queue-count'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      ).timeout(const Duration(milliseconds: 2000));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return (data['queueCount'] as num?)?.toInt() ?? 0;
+      }
+      return 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
   /// Aktif eşleşme arar
   static Future<Map<String, dynamic>?> checkMatch(
     int tmdbId, {
@@ -880,31 +927,8 @@ class ApiService {
     } catch (_) {}
   }
 
-  /// Toplam kuyruk bekleyen kişi sayısını getirir
-  static Future<int> getQueueCount() async {
-    final token = AuthService.token;
-    if (token == null || token.isEmpty) return 0;
 
-    try {
-      final response = await http.get(
-        Uri.parse('$baseUrl/api/match/queue-count'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-      ).timeout(const Duration(seconds: 3));
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        return data['queueCount'] ?? 0;
-      }
-      return 0;
-    } catch (_) {
-      return 0;
-    }
-  }
-
-  /// Letterboxd dosyasını parse edip önizleme üretir (ZIP veya CSV)
+  /// Letterboxd ZIP veya CSV dosyasını okuyup parse edilmiş listeleri ve afişleri önizleme olarak döner
   static Future<Map<String, dynamic>?> previewLetterboxdImport({
     required String fileName,
     required Uint8List bytes,
@@ -915,7 +939,7 @@ class ApiService {
     try {
       final request = http.MultipartRequest(
         'POST',
-        Uri.parse('$baseUrl/api/lists/import/preview'),
+        Uri.parse('$baseUrl/api/lists/import/letterboxd/preview'),
       );
 
       request.headers['Authorization'] = 'Bearer $token';
@@ -938,7 +962,7 @@ class ApiService {
 
       if (data != null) {
         return {
-          'error': (data['error'] ?? 'Onizleme alinamadi').toString(),
+          'error': (data['error'] ?? 'Önizleme yüklenemedi').toString(),
           'errorCode': (data['errorCode'] ?? '').toString(),
           'statusCode': response.statusCode,
         };
@@ -946,33 +970,83 @@ class ApiService {
 
       return {
         'error':
-            'Onizleme hatasi (HTTP ${response.statusCode}): ${response.body}',
+            'Sistem hatası (HTTP ${response.statusCode}): ${response.body}',
         'statusCode': response.statusCode,
       };
     } catch (e) {
-      return {'error': 'Onizleme sirasinda baglanti hatasi: $e'};
+      return {'error': 'Önizleme sırasında bağlantı hatası: $e'};
     }
   }
 
-  /// Letterboxd importunu commit eder
-  static Future<Map<String, dynamic>?> commitLetterboxdImport({
-    required String previewToken,
+  /// Letterboxd ZIP veya CSV dosyasını RabbitMQ kuyruğuna yükler
+  static Future<Map<String, dynamic>?> startLetterboxdImport({
+    required String fileName,
+    required Uint8List bytes,
     String strategy = 'merge',
+    List<String>? selectedListNames,
   }) async {
     final token = AuthService.token;
     if (token == null || token.isEmpty) return null;
 
     try {
-      final response = await http.post(
-        Uri.parse('$baseUrl/api/lists/import/commit'),
+      final request = http.MultipartRequest(
+        'POST',
+        Uri.parse('$baseUrl/api/lists/import/letterboxd'),
+      );
+
+      request.headers['Authorization'] = 'Bearer $token';
+      request.fields['strategy'] = strategy;
+      if (selectedListNames != null && selectedListNames.isNotEmpty) {
+        request.fields['selectedListNames'] = jsonEncode(selectedListNames);
+      }
+      request.files.add(
+        http.MultipartFile.fromBytes('file', bytes, filename: fileName),
+      );
+
+      final streamed = await request.send();
+      final response = await http.Response.fromStream(streamed);
+
+      Map<String, dynamic>? data;
+      try {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map<String, dynamic>) {
+          data = decoded;
+        }
+      } catch (_) {}
+
+      // 202 Accepted status'u başarı olarak değerlendirilir
+      if (response.statusCode == 202 && data != null) return data;
+
+      if (data != null) {
+        return {
+          'error': (data['error'] ?? 'İçe aktarma başlatılamadı').toString(),
+          'errorCode': (data['errorCode'] ?? '').toString(),
+          'statusCode': response.statusCode,
+        };
+      }
+
+      return {
+        'error':
+            'Aktarım hatası (HTTP ${response.statusCode}): ${response.body}',
+        'statusCode': response.statusCode,
+      };
+    } catch (e) {
+      return {'error': 'Aktarım sırasında bağlantı hatası: $e'};
+    }
+  }
+
+  /// RabbitMQ import durumunu (progress) kontrol eder
+  static Future<Map<String, dynamic>?> getImportStatus(String jobId) async {
+    final token = AuthService.token;
+    if (token == null || token.isEmpty) return null;
+
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/api/lists/import/status/$jobId'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',
         },
-        body: jsonEncode({
-          'previewToken': previewToken,
-          'strategy': strategy,
-        }),
       );
 
       Map<String, dynamic>? data;
@@ -987,19 +1061,18 @@ class ApiService {
 
       if (data != null) {
         return {
-          'error': (data['error'] ?? 'Import islemi basarisiz').toString(),
+          'error': (data['error'] ?? 'Durum alınamadı').toString(),
           'errorCode': (data['errorCode'] ?? '').toString(),
           'statusCode': response.statusCode,
         };
       }
 
       return {
-        'error':
-            'Import hatasi (HTTP ${response.statusCode}): ${response.body}',
+        'error': 'Durum hatası (HTTP ${response.statusCode}): ${response.body}',
         'statusCode': response.statusCode,
       };
     } catch (e) {
-      return {'error': 'Import sirasinda baglanti hatasi: $e'};
+      return {'error': 'Durum sorgusu sırasında bağlantı hatası: $e'};
     }
   }
 
@@ -1117,10 +1190,17 @@ class ApiService {
       ).timeout(const Duration(seconds: 10));
 
       final statusCode = response.statusCode;
+      debugPrint(
+        '[CHAT-DIAG][API][GET_ROOMS] status=$statusCode bodyLen=${response.body.length}',
+      );
 
       if (statusCode == 200) {
         // OPTIMIZED: JSON parsing'i isolate'a taşı
         final rooms = await parseJsonList(response.body);
+        final first = rooms.isNotEmpty ? rooms.first : null;
+        debugPrint(
+          '[CHAT-DIAG][API][GET_ROOMS_OK] count=${rooms.length} first={roomId:${first?['roomId']}, lastMessage:${first?['lastMessage']}, lastMessageTime:${first?['lastMessageTime']}, lastTimestamp:${first?['lastTimestamp']}}',
+        );
         return {
           'ok': true,
           'rooms': rooms,
@@ -1179,12 +1259,43 @@ class ApiService {
       ).timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
+        debugPrint(
+          '[CHAT-DIAG][API][GET_MESSAGES] roomId=$roomId status=${response.statusCode} bodyLen=${response.body.length}',
+        );
         final decoded = jsonDecode(response.body);
 
         // Paginated format: { "messages": [...], "hasMore": bool }
         if (decoded is Map<String, dynamic>) {
           final List? msgs = decoded['messages'];
           if (msgs != null) {
+            final first = msgs.isNotEmpty ? msgs.first : null;
+            final last = msgs.isNotEmpty ? msgs.last : null;
+
+            int tsFromRaw(dynamic v) {
+              if (v == null) return 0;
+              if (v is int) return v;
+              if (v is num) return v.toInt();
+              return int.tryParse(v.toString()) ?? 0;
+            }
+
+            final firstTs = tsFromRaw(first?['timestamp']);
+            final lastTs = tsFromRaw(last?['timestamp']);
+            var nonDecreasing = true;
+            var prev = -9223372036854775807;
+            for (final raw in msgs) {
+              if (raw is Map) {
+                final ts = tsFromRaw(raw['timestamp']);
+                if (ts < prev) {
+                  nonDecreasing = false;
+                  break;
+                }
+                prev = ts;
+              }
+            }
+
+            debugPrint(
+              '[CHAT-DIAG][API][GET_MESSAGES_OK] roomId=$roomId count=${msgs.length} first={id:${first?['_id']}, content:${first?['content']}, ts:${first?['timestamp']}} last={id:${last?['_id']}, content:${last?['content']}, ts:${last?['timestamp']}} rawOrder={firstTs:$firstTs,lastTs:$lastTs,nonDecreasing:$nonDecreasing}',
+            );
             return msgs.cast<Map<String, dynamic>>();
           }
           return [];

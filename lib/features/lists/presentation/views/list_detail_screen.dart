@@ -4,6 +4,7 @@ import 'package:reorderable_grid_view/reorderable_grid_view.dart';
 
 import '../../../../core/mixins/view_effect_listener_mixin.dart';
 import '../../../../core/mixins/view_model_binding_mixin.dart';
+import '../../../../core/theme/app_colors.dart';
 import '../../../../models/movie.dart';
 import '../../../movies/presentation/views/movie_detail_screen.dart';
 import '../../../profile/data/models/movie_list_model.dart';
@@ -36,10 +37,10 @@ class _ListDetailScreenState extends State<ListDetailScreen>
   @override
   Widget buildWithViewModel(BuildContext context, ListDetailViewModel vm) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0F0F0F),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         title: Text(vm.listName),
-        backgroundColor: const Color(0xFF1A1A1A),
+        backgroundColor: AppColors.surface,
         actions: <Widget>[
           if (widget.isMe && !vm.isEditing)
             IconButton(
@@ -54,8 +55,8 @@ class _ListDetailScreenState extends State<ListDetailScreen>
                 if (value == 'delete') _confirmDelete(vm);
               },
               itemBuilder: (_) => const <PopupMenuEntry<String>>[
-                PopupMenuItem(value: 'edit', child: Text('Duzenle')),
-                PopupMenuItem(value: 'rename', child: Text('Ismi Degistir')),
+                PopupMenuItem(value: 'edit', child: Text('Düzenle')),
+                PopupMenuItem(value: 'rename', child: Text('İsmi Değiştir')),
                 PopupMenuItem(value: 'delete', child: Text('Sil')),
               ],
             ),
@@ -63,13 +64,13 @@ class _ListDetailScreenState extends State<ListDetailScreen>
       ),
       body: vm.isLoading
           ? const Center(
-              child: CircularProgressIndicator(color: Colors.redAccent),
+              child: CircularProgressIndicator(color: AppColors.primary),
             )
           : vm.items.isEmpty
               ? const Center(
                   child: Text(
                     'Bu liste henuz bos.',
-                    style: TextStyle(color: Colors.white54),
+                    style: TextStyle(color: AppColors.textMedium),
                   ),
                 )
               : Padding(
@@ -106,12 +107,14 @@ class _ListDetailScreenState extends State<ListDetailScreen>
                                           child: CircleAvatar(
                                             radius: 12,
                                             backgroundColor: pending
-                                                ? Colors.greenAccent
-                                                : Colors.redAccent,
+                                                ? AppColors.success
+                                                : AppColors.error,
                                             child: Icon(
-                                              pending ? Icons.undo : Icons.close,
+                                              pending
+                                                  ? Icons.undo
+                                                  : Icons.close,
                                               size: 14,
-                                              color: Colors.black,
+                                              color: AppColors.background,
                                             ),
                                           ),
                                         ),
@@ -155,12 +158,13 @@ class _ListDetailScreenState extends State<ListDetailScreen>
                                       voteAverage: 0,
                                       releaseDate: '',
                                       voteCount: 0,
-                                      posterPath: item.posterUrl.startsWith('http')
-                                          ? item.posterUrl.replaceFirst(
-                                              'https://image.tmdb.org/t/p/w500',
-                                              '',
-                                            )
-                                          : item.posterUrl,
+                                      posterPath:
+                                          item.posterUrl.startsWith('http')
+                                              ? item.posterUrl.replaceFirst(
+                                                  'https://image.tmdb.org/t/p/w500',
+                                                  '',
+                                                )
+                                              : item.posterUrl,
                                     ),
                                   ),
                                 ),
@@ -224,7 +228,7 @@ class _ListDetailScreenState extends State<ListDetailScreen>
     final searchController = TextEditingController();
     await showModalBottomSheet<void>(
       context: context,
-      backgroundColor: const Color(0xFF111317),
+      backgroundColor: AppColors.background,
       isScrollControlled: true,
       builder: (context) {
         return Padding(
@@ -241,10 +245,10 @@ class _ListDetailScreenState extends State<ListDetailScreen>
                 TextField(
                   controller: searchController,
                   onChanged: viewModel.onSearchChanged,
-                  style: const TextStyle(color: Colors.white),
+                  style: const TextStyle(color: AppColors.textHigh),
                   decoration: const InputDecoration(
                     hintText: 'Film ara',
-                    hintStyle: TextStyle(color: Colors.white38),
+                    hintStyle: TextStyle(color: AppColors.textMedium),
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -252,7 +256,7 @@ class _ListDetailScreenState extends State<ListDetailScreen>
                   child: viewModel.isSearching
                       ? const Center(
                           child: CircularProgressIndicator(
-                            color: Colors.redAccent,
+                            color: AppColors.primary,
                           ),
                         )
                       : ListView.builder(
@@ -262,11 +266,13 @@ class _ListDetailScreenState extends State<ListDetailScreen>
                             return ListTile(
                               title: Text(
                                 movie.title,
-                                style: const TextStyle(color: Colors.white),
+                                style:
+                                    const TextStyle(color: AppColors.textHigh),
                               ),
                               subtitle: Text(
                                 movie.releaseYear,
-                                style: const TextStyle(color: Colors.white54),
+                                style: const TextStyle(
+                                    color: AppColors.textMedium),
                               ),
                               onTap: () async {
                                 await viewModel.addMovie(movie);
@@ -300,8 +306,8 @@ class _PosterCard extends StatelessWidget {
       borderRadius: BorderRadius.circular(10),
       child: imageUrl.isEmpty
           ? Container(
-              color: const Color(0xFF1E1E1E),
-              child: const Icon(Icons.movie, color: Colors.white38),
+              color: AppColors.surface,
+              child: const Icon(Icons.movie, color: AppColors.textMedium),
             )
           : CachedNetworkImage(imageUrl: imageUrl, fit: BoxFit.cover),
     );

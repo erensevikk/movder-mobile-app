@@ -19,11 +19,13 @@ class NavigateToEffect extends ViewEffect {
     required this.pageBuilder,
     this.replace = false,
     this.clearStack = false,
+    this.onPopped,
   });
 
   final WidgetBuilder pageBuilder;
   final bool replace;
   final bool clearStack;
+  final ValueChanged<Object?>? onPopped;
 }
 
 class PopEffect extends ViewEffect {

@@ -11,23 +11,32 @@ class ChatService {
 
   Stream<Map<String, dynamic>> get messageStream => _messageController.stream;
 
-  void connect(String roomId) {
-    if (_channel != null) return;
+  Completer<void>? _readyCompleter;
+
+  Future<void> connect(String roomId) async {
+    if (_channel != null && _readyCompleter?.isCompleted == true) {
+      return;
+    }
 
     final token = AuthService.token;
-    if (token == null) return;
+    if (token == null || token.isEmpty) {
+      throw StateError('Token bulunamadı');
+    }
 
-    // TODO: Update URL specifically to your backend deployment
-    // Example: ws://192.168.1.100:8080 or wss://yourdomain.com
-    // ignore: todo
-    final wsUrl = Uri.parse('ws://10.0.2.2:8080/ws/chat/$roomId?token=$token');
+    const wsBase = String.fromEnvironment('WS_BASE_URL',
+        defaultValue: 'ws://10.0.2.2:8080');
+    final wsUrl = Uri.parse('$wsBase/ws/chat/$roomId?token=$token');
 
     try {
       final channel = WebSocketChannel.connect(wsUrl);
       _channel = channel;
+      _readyCompleter = Completer<void>();
 
       channel.ready.then((_) {
         if (_channel != channel) return;
+        if (!(_readyCompleter?.isCompleted ?? true)) {
+          _readyCompleter?.complete();
+        }
 
         channel.stream.listen(
           (message) {
@@ -45,18 +54,30 @@ class ChatService {
             debugPrint('WebSocket Bağlantısı Koptu');
             if (_channel == channel) {
               _channel = null;
+              _readyCompleter = null;
             }
           },
         );
       }).catchError((error) {
         debugPrint('WebSocket Bağlantı Hatası: $error');
+        if (!(_readyCompleter?.isCompleted ?? true)) {
+          _readyCompleter?.completeError(error);
+        }
         if (_channel == channel) {
           _channel = null;
+          _readyCompleter = null;
         }
+      });
+
+      await _readyCompleter?.future.timeout(const Duration(seconds: 3),
+          onTimeout: () {
+        throw TimeoutException('WebSocket bağlantısı zaman aşımına uğradı');
       });
     } catch (e) {
       debugPrint('WebSocket Bağlantı Hatası: $e');
       _channel = null;
+      _readyCompleter = null;
+      rethrow;
     }
   }
 
@@ -74,6 +95,17 @@ class ChatService {
     return false;
   }
 
+  Future<bool> sendMessageAsync(String text, {String? clientMessageId}) async {
+    if (_channel == null || _readyCompleter == null) return false;
+
+    try {
+      await _readyCompleter!.future.timeout(const Duration(seconds: 2));
+      return sendMessage(text, clientMessageId: clientMessageId);
+    } catch (_) {
+      return false;
+    }
+  }
+
   void sendReadReceipt() {
     if (_channel != null) {
       final msg = {
@@ -86,6 +118,7 @@ class ChatService {
   void dispose() {
     _channel?.sink.close();
     _channel = null;
+    _readyCompleter = null;
     _messageController.close();
   }
 }

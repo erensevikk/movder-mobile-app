@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../core/theme/app_colors.dart';
+
 class AppTextField extends StatelessWidget {
   const AppTextField({
     super.key,
@@ -37,12 +39,12 @@ class AppTextField extends StatelessWidget {
       children: <Widget>[
         Container(
           decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.06),
+            color: AppColors.textHigh.withValues(alpha: 0.06),
             borderRadius: BorderRadius.circular(14),
             border: Border.all(
               color: errorText != null
-                  ? Colors.redAccent.withValues(alpha: 0.5)
-                  : Colors.white.withValues(alpha: 0.08),
+                  ? AppColors.error.withValues(alpha: 0.5)
+                  : AppColors.textHigh.withValues(alpha: 0.08),
             ),
           ),
           child: TextField(
@@ -50,17 +52,17 @@ class AppTextField extends StatelessWidget {
             keyboardType: keyboardType,
             obscureText: obscureText,
             maxLines: obscureText ? 1 : maxLines,
-            style: const TextStyle(color: Colors.white, fontSize: 15),
+            style: const TextStyle(color: AppColors.textHigh, fontSize: 15),
             onChanged: onChanged,
             onSubmitted: onSubmitted,
             readOnly: readOnly,
             onTap: onTap,
             decoration: InputDecoration(
-              prefixIcon: Icon(icon, color: Colors.white30, size: 22),
+              prefixIcon: Icon(icon, color: AppColors.textMedium, size: 22),
               suffixIcon: suffixIcon,
               hintText: label,
-              hintStyle: TextStyle(
-                color: Colors.white.withValues(alpha: 0.25),
+              hintStyle: const TextStyle(
+                color: AppColors.textMedium,
                 fontSize: 14,
               ),
               border: InputBorder.none,
@@ -77,7 +79,7 @@ class AppTextField extends StatelessWidget {
             child: Text(
               errorText!,
               style: const TextStyle(
-                color: Colors.redAccent,
+                color: AppColors.error,
                 fontSize: 12,
                 fontWeight: FontWeight.w500,
               ),

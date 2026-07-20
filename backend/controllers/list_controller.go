@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -564,8 +565,132 @@ func ReorderList() gin.HandlerFunc {
 	}
 }
 
-// PreviewLetterboxdImport — ZIP/CSV import Ã¶nizlemesi Ã¼retir, DB yazmaz
+// PreviewLetterboxdImport — Yalnızca dosyayı okur, listeleri parse eder ve UI için her listenin ilk posterini döner
 func PreviewLetterboxdImport() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !isLetterboxdImportEnabled() {
+			errorResponse(c, http.StatusServiceUnavailable, "IMPORT_DISABLED", "Letterboxd import özelliği şu anda kapalı", nil)
+			return
+		}
+
+		_, ok := mustUserID(c)
+		if !ok {
+			return
+		}
+
+		fileHeader, err := c.FormFile("file")
+		if err != nil {
+			errorResponse(c, http.StatusBadRequest, "FILE_REQUIRED", "Yüklenecek dosya bulunamadı", nil)
+			return
+		}
+
+		f, err := fileHeader.Open()
+		if err != nil {
+			errorResponse(c, http.StatusBadRequest, "FILE_OPEN_FAILED", "Dosya açılamadı", err.Error())
+			return
+		}
+		defer f.Close()
+
+		payload, err := io.ReadAll(io.LimitReader(f, maxImportUploadBytes+1))
+		if err != nil {
+			errorResponse(c, http.StatusBadRequest, "FILE_READ_FAILED", "Dosya okunamadı", err.Error())
+			return
+		}
+		if len(payload) > maxImportUploadBytes {
+			errorResponse(c, http.StatusRequestEntityTooLarge, "UPLOAD_TOO_LARGE", "Dosya çok büyük (max 10MB)", nil)
+			return
+		}
+
+		parsedLists, warnings, err := ParseLetterboxdPayloadPublic(payload, fileHeader.Filename)
+		if err != nil {
+			errorResponse(c, http.StatusInternalServerError, "PARSE_FAILED", "Dosya ayrıştırılamadı", err.Error())
+			return
+		}
+
+		creatorStr := ""
+		if isZipPayload(payload, fileHeader.Filename) {
+			creatorStr = extractUsernameFromZip(payload)
+		}
+
+		// UI için sadece her listenin ilk filminin posterini hızlıca fetch et
+		type PreviewList struct {
+			Name           string `json:"name"`
+			TotalItems     int    `json:"totalItems"`
+			FirstPosterURL string `json:"firstPosterUrl"`
+		}
+
+		var previewResponse []PreviewList
+
+		for i := range parsedLists {
+			firstPoster := ""
+			// İlk elemanın tam TMDB ID'sini çöz, sadece afiş için
+			if len(parsedLists[i].Items) > 0 {
+				firstItem := &parsedLists[i].Items[0]
+				MatchTMDBMoviePublic(firstItem)
+				firstPoster = firstItem.PosterURL
+			}
+
+			previewResponse = append(previewResponse, PreviewList{
+				Name:           parsedLists[i].Name,
+				TotalItems:     len(parsedLists[i].Items),
+				FirstPosterURL: firstPoster,
+			})
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"message":  "Önizleme başarıyla oluşturuldu",
+			"warnings": warnings,
+			"lists":    previewResponse,
+			"creator":  creatorStr,
+		})
+	}
+}
+
+func extractUsernameFromZip(payload []byte) string {
+	zr, err := zip.NewReader(bytes.NewReader(payload), int64(len(payload)))
+	if err != nil {
+		return ""
+	}
+	for _, f := range zr.File {
+		baseName := filepath.Base(filepath.ToSlash(f.Name))
+		if strings.EqualFold(baseName, "profile.csv") || strings.EqualFold(f.Name, "profile.csv") {
+			rc, err := f.Open()
+			if err != nil {
+				return ""
+			}
+			defer rc.Close()
+			reader := csv.NewReader(rc)
+			reader.FieldsPerRecord = -1
+			reader.LazyQuotes = true
+			reader.TrimLeadingSpace = true
+			records, err := reader.ReadAll()
+			if err != nil || len(records) < 2 {
+				return ""
+			}
+			usernameIdx := -1
+			for i, header := range records[0] {
+				// BOM karakterini ve boşlukları temizle
+				cleanHeader := strings.TrimSpace(strings.Trim(header, "\ufeff\""))
+				if strings.EqualFold(cleanHeader, "Username") {
+					usernameIdx = i
+					break
+				}
+			}
+			if usernameIdx >= 0 && usernameIdx < len(records[1]) {
+				val := strings.TrimSpace(records[1][usernameIdx])
+				// Tırnak içindeyse temizle
+				if strings.HasPrefix(val, "\"") && strings.HasSuffix(val, "\"") && len(val) >= 2 {
+					val = val[1 : len(val)-1]
+				}
+				return val
+			}
+		}
+	}
+	return ""
+}
+
+// StartLetterboxdImport — ZIP/CSV dosyasını alır, DB'ye ImportJob kaydeder ve RabbitMQ'ya kuyruklar
+func StartLetterboxdImport() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !isLetterboxdImportEnabled() {
 			errorResponse(c, http.StatusServiceUnavailable, "IMPORT_DISABLED", "Letterboxd import ozelligi su anda kapali", nil)
@@ -575,6 +700,30 @@ func PreviewLetterboxdImport() gin.HandlerFunc {
 		userID, ok := mustUserID(c)
 		if !ok {
 			return
+		}
+
+		strategy := c.PostForm("strategy")
+		if strategy == "" {
+			strategy = "merge" // Default strategy
+		}
+
+		selectedListNamesRaw := strings.TrimSpace(c.PostForm("selectedListNames"))
+		selectedListNames := make([]string, 0)
+		if selectedListNamesRaw != "" {
+			if strings.HasPrefix(selectedListNamesRaw, "[") {
+				if err := json.Unmarshal([]byte(selectedListNamesRaw), &selectedListNames); err != nil {
+					errorResponse(c, http.StatusBadRequest, "INVALID_SELECTED_LISTS", "selectedListNames formatı geçersiz", err.Error())
+					return
+				}
+			} else {
+				parts := strings.Split(selectedListNamesRaw, ",")
+				for _, p := range parts {
+					name := strings.TrimSpace(p)
+					if name != "" {
+						selectedListNames = append(selectedListNames, name)
+					}
+				}
+			}
 		}
 
 		fileHeader, err := c.FormFile("file")
@@ -600,244 +749,65 @@ func PreviewLetterboxdImport() gin.HandlerFunc {
 			return
 		}
 
-		type parseResult struct {
-			lists    []parsedList
-			warnings []string
-			err      error
-		}
-		parseCh := make(chan parseResult, 1)
-		go func() {
-			lists, warnings, err := parseLetterboxdPayload(payload, fileHeader.Filename)
-			parseCh <- parseResult{lists: lists, warnings: warnings, err: err}
-		}()
-
-		var lists []parsedList
-		var warnings []string
-		select {
-		case res := <-parseCh:
-			lists, warnings, err = res.lists, res.warnings, res.err
-		case <-time.After(parseTimeout):
-			errorResponse(c, http.StatusRequestTimeout, "PARSE_TIMEOUT", "Dosya parse zaman asimina ugradi", nil)
-			return
-		}
-
-		if err != nil {
-			errorResponse(c, http.StatusBadRequest, "PARSE_FAILED", err.Error(), nil)
-			return
-		}
-		if len(lists) == 0 {
-			errorResponse(c, http.StatusBadRequest, "NO_LIST_FOUND", "Dosyada import edilecek liste bulunamadi", nil)
-			return
-		}
-
-		unresolvedTotal := 0
-		unresolvedItems := make([]previewUnresolvedItem, 0)
-		for li := range lists {
-			for ii := range lists[li].Items {
-				matchTMDBMovie(&lists[li].Items[ii])
-				if lists[li].Items[ii].TmdbID == 0 {
-					unresolvedTotal++
-					unresolvedItems = append(unresolvedItems, previewUnresolvedItem{
-						ListName: lists[li].Name,
-						Position: lists[li].Items[ii].Position,
-						Name:     lists[li].Items[ii].Name,
-						Year:     lists[li].Items[ii].Year,
-						URL:      lists[li].Items[ii].URL,
-						Reason:   lists[li].Items[ii].Reason,
-					})
-				}
-			}
-		}
-
-		c.Set("requestTimeout", importRequestTimeout)
 		ctx, cancel, _ := requestContext(c)
 		defer cancel()
-		conflicts := detectConflictCandidates(ctx, userID, lists)
 
-		token := primitive.NewObjectID().Hex()
-		importPreviewStoreMu.Lock()
-		importPreviewStore[token] = importPreviewData{UserID: userID, Lists: lists, CreatedAt: time.Now()}
-		importPreviewStoreMu.Unlock()
+		// ImportJob kaydı oluştur
+		importJob := models.ImportJob{
+			UserID:            userID,
+			Status:            "pending",
+			TotalItems:        0,
+			ProcessedItems:    0,
+			FailedItems:       0,
+			Progress:          0,
+			Payload:           payload,
+			FileName:          fileHeader.Filename,
+			Strategy:          strategy,
+			SelectedListNames: selectedListNames,
+			CreatedAt:         time.Time{}, // MongoDB sürücüsü zamanı dolduracaktır, custom için time.Now()
+			UpdatedAt:         time.Now(),
+		}
 
-		responseLists := make([]gin.H, 0, len(lists))
-		for _, l := range lists {
-			resolved := 0
-			for _, it := range l.Items {
-				if it.TmdbID > 0 {
-					resolved++
-				}
+		importJob.CreatedAt = time.Now()
+
+		importJobsColl := config.GetCollection(config.DB, "import_jobs")
+		res, err := importJobsColl.InsertOne(ctx, importJob)
+		if err != nil || res.InsertedID == nil {
+			errorResponse(c, http.StatusInternalServerError, "DB_ERROR", "Job kaydı açılamadı", err.Error())
+			return
+		}
+
+		jobIDHex := res.InsertedID.(primitive.ObjectID).Hex()
+
+		// RabbitMQ'ya At
+		if config.RabbitMQManagerInstance != nil {
+			type CSVImportMessage struct {
+				JobID             string   `json:"jobId"`
+				UserID            string   `json:"userId"`
+				Strategy          string   `json:"strategy"`
+				SelectedListNames []string `json:"selectedListNames,omitempty"`
 			}
-			responseLists = append(responseLists, gin.H{
-				"name":        l.Name,
-				"description": l.Description,
-				"createdAt":   l.CreatedAt,
-				"itemCount":   len(l.Items),
-				"resolved":    resolved,
-				"unresolved":  len(l.Items) - resolved,
+			msgData, _ := json.Marshal(CSVImportMessage{
+				JobID:             jobIDHex,
+				UserID:            userID,
+				Strategy:          strategy,
+				SelectedListNames: selectedListNames,
 			})
+			_ = config.RabbitMQManagerInstance.Publish("", "csv_import_queue", msgData)
+		} else {
+			// RabbitMQ Yoksa Logla veya Hata ver
+			log.Println("⚠️ RabbitMQ çalışmıyor, CSV worker kullanılamaz!")
+			errorResponse(c, http.StatusInternalServerError, "QUEUE_ERROR", "Sistem arka plan görevini sıraya alamadı.", nil)
+			return
 		}
 
-		c.JSON(http.StatusOK, gin.H{
-			"previewToken": token,
-			"lists":        responseLists,
-			"warnings":     warnings,
-			"warningsSummary": gin.H{
-				"warningCount": len(warnings),
-			},
-			"unresolvedItems": unresolvedItems,
-			"conflicts":       conflicts,
-			"totals": gin.H{
-				"listCount":       len(lists),
-				"itemCount":       totalItems(lists),
-				"unresolvedCount": unresolvedTotal,
-				"conflictCount":   len(conflicts),
-			},
+		c.JSON(http.StatusAccepted, gin.H{
+			"message": "İçe aktarım sıraya alındı, işlem arka planda yapılıyor.",
+			"jobId":   jobIDHex,
 		})
 	}
 }
-
-// CommitLetterboxdImport â€” Ã¶nizlenen importu DB'ye yazar
-func CommitLetterboxdImport() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		if !isLetterboxdImportEnabled() {
-			errorResponse(c, http.StatusServiceUnavailable, "IMPORT_DISABLED", "Letterboxd import ozelligi su anda kapali", nil)
-			return
-		}
-
-		userID, ok := mustUserID(c)
-		if !ok {
-			return
-		}
-
-		var input importCommitInput
-		if err := c.ShouldBindJSON(&input); err != nil {
-			errorResponse(c, http.StatusBadRequest, "INVALID_BODY", "Gecersiz istek govdesi", nil)
-			return
-		}
-
-		strategy := strings.ToLower(strings.TrimSpace(input.Strategy))
-		if strategy == "" {
-			strategy = "merge"
-		}
-		if strategy != "merge" && strategy != "overwrite" && strategy != "duplicate" {
-			errorResponse(c, http.StatusBadRequest, "INVALID_STRATEGY", "Gecersiz strategy: merge | overwrite | duplicate", nil)
-			return
-		}
-
-		importPreviewStoreMu.Lock()
-		preview, ok := importPreviewStore[input.PreviewToken]
-		if ok {
-			delete(importPreviewStore, input.PreviewToken)
-		}
-		importPreviewStoreMu.Unlock()
-
-		if !ok {
-			errorResponse(c, http.StatusNotFound, "PREVIEW_NOT_FOUND", "Preview bulunamadi veya suresi doldu", nil)
-			return
-		}
-		if preview.UserID != userID {
-			errorResponse(c, http.StatusForbidden, "PREVIEW_FORBIDDEN", "Bu preview size ait degil", nil)
-			return
-		}
-		if time.Since(preview.CreatedAt) > previewTTL {
-			errorResponse(c, http.StatusGone, "PREVIEW_EXPIRED", "Preview suresi doldu", nil)
-			return
-		}
-
-		c.Set("requestTimeout", importRequestTimeout)
-		ctx, cancel, _ := requestContext(c)
-		defer cancel()
-
-		listColl := config.GetCollection(config.DB, "lists")
-		itemColl := config.GetCollection(config.DB, "list_items")
-
-		createdLists := 0
-		updatedLists := 0
-		addedItems := 0
-		skippedDuplicates := 0
-		skippedUnresolved := 0
-
-		skippedUnresolvedDetails := make([]gin.H, 0)
-		skippedDuplicateDetails := make([]gin.H, 0)
-
-		for _, incoming := range preview.Lists {
-			listID, existed, err := resolveTargetList(ctx, listColl, itemColl, userID, incoming, strategy)
-			if err != nil {
-				errorResponse(c, http.StatusInternalServerError, "LIST_WRITE_FAILED", "Liste yazilirken hata olustu", err.Error())
-				return
-			}
-			if existed {
-				updatedLists++
-			} else {
-				createdLists++
-			}
-
-			for _, item := range incoming.Items {
-				if item.TmdbID == 0 {
-					skippedUnresolved++
-					skippedUnresolvedDetails = append(skippedUnresolvedDetails, gin.H{
-						"listName": incoming.Name,
-						"position": item.Position,
-						"name":     item.Name,
-						"year":     item.Year,
-						"url":      item.URL,
-						"reason":   item.Reason,
-					})
-					continue
-				}
-
-				if strategy != "overwrite" {
-					cnt, _ := itemColl.CountDocuments(ctx, bson.M{"listId": listID, "tmdbId": item.TmdbID})
-					if cnt > 0 {
-						skippedDuplicates++
-						skippedDuplicateDetails = append(skippedDuplicateDetails, gin.H{
-							"listName":  incoming.Name,
-							"position":  item.Position,
-							"tmdbId":    item.TmdbID,
-							"movieName": item.MovieName,
-						})
-						continue
-					}
-				}
-
-				_, err = itemColl.InsertOne(ctx, models.ListItem{
-					ListID:    listID,
-					Position:  item.Position,
-					TmdbID:    item.TmdbID,
-					MovieName: item.MovieName,
-					PosterURL: item.PosterURL,
-					AddedAt:   time.Now(),
-				})
-				if err == nil {
-					addedItems++
-				}
-			}
-
-			_, _ = listColl.UpdateOne(ctx, bson.M{"_id": listID}, bson.M{"$set": bson.M{"updatedAt": time.Now()}})
-		}
-
-		// Import başarılı — kullanıcıyı işaretleyelim
-		userIDObj, _ := primitive.ObjectIDFromHex(userID)
-		userColl := config.GetCollection(config.DB, "users")
-		_, _ = userColl.UpdateOne(ctx, bson.M{"_id": userIDObj}, bson.M{"$set": bson.M{"letterboxd_imported": true}})
-
-		c.JSON(http.StatusOK, gin.H{
-			"message": "Letterboxd import tamamlandi",
-			"summary": gin.H{
-				"createdLists":      createdLists,
-				"updatedLists":      updatedLists,
-				"addedItems":        addedItems,
-				"skippedDuplicates": skippedDuplicates,
-				"skippedUnresolved": skippedUnresolved,
-			},
-			"skipped": gin.H{
-				"unresolved": skippedUnresolvedDetails,
-				"duplicates": skippedDuplicateDetails,
-			},
-		})
-	}
-}
-func resolveTargetList(
+func ResolveTargetListPublic(
 	ctx context.Context,
 	listColl *mongo.Collection,
 	itemColl *mongo.Collection,
@@ -927,7 +897,7 @@ func totalItems(lists []parsedList) int {
 	return t
 }
 
-func parseLetterboxdPayload(payload []byte, filename string) ([]parsedList, []string, error) {
+func ParseLetterboxdPayloadPublic(payload []byte, filename string) ([]parsedList, []string, error) {
 	if isZipPayload(payload, filename) {
 		return parseZipPayload(payload)
 	}
@@ -1129,7 +1099,7 @@ func parseSingleCSVPayload(payload []byte, filename string) (parsedList, []strin
 	return result, warnings, nil
 }
 
-func matchTMDBMovie(item *parsedListItem) {
+func MatchTMDBMoviePublic(item *parsedListItem) {
 	if item == nil {
 		return
 	}
@@ -1439,4 +1409,44 @@ func isBlankRow(row []string) bool {
 		}
 	}
 	return true
+}
+
+// GetImportProgress — CSV içe aktarım işleminin yüzdelik durumunu döner
+func GetImportProgress() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID, ok := mustUserID(c)
+		if !ok {
+			return
+		}
+
+		jobIDHex := c.Param("jobId")
+		objID, err := primitive.ObjectIDFromHex(jobIDHex)
+		if err != nil {
+			errorResponse(c, http.StatusBadRequest, "INVALID_JOB_ID", "Geçersiz job ID", nil)
+			return
+		}
+
+		ctx, cancel, _ := requestContext(c)
+		defer cancel()
+
+		var job models.ImportJob
+		importJobsColl := config.GetCollection(config.DB, "import_jobs")
+
+		err = importJobsColl.FindOne(ctx, bson.M{"_id": objID, "userId": userID}).Decode(&job)
+		if err != nil {
+			errorResponse(c, http.StatusNotFound, "JOB_NOT_FOUND", "İşlem bulunamadı", nil)
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"jobId":          jobIDHex,
+			"status":         job.Status,
+			"progress":       job.Progress,
+			"totalItems":     job.TotalItems,
+			"processedItems": job.ProcessedItems,
+			"failedItems":    job.FailedItems,
+			"logs":           job.Logs,
+			"updatedAt":      job.UpdatedAt,
+		})
+	}
 }

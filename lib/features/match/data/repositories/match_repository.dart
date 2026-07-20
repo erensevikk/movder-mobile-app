@@ -6,6 +6,9 @@ abstract class MatchRepository {
   /// Eşleşme kuyruğuna katıl
   Future<Result<QueueStatusModel>> joinQueue(MatchSearchParams params);
 
+  /// Genel kuyruk kişi sayısını al
+  Future<Result<int>> getQueueCount();
+
   /// Kuyruk durumunu kontrol et
   Future<Result<MatchModel?>> checkQueueStatus(int tmdbId);
 
@@ -13,10 +16,13 @@ abstract class MatchRepository {
   Future<Result<void>> cancelMatch(int tmdbId);
 
   /// Eşlemeyi kabul et
-  Future<Result<void>> acceptMatch(String roomId);
+  Future<Result<Map<String, dynamic>>> acceptMatch(String roomId, String targetUserId);
 
   /// Eşlemeyi reddet
-  Future<Result<void>> rejectMatch(String roomId);
+  Future<Result<void>> rejectMatch(String roomId, String targetUserId);
+
+  /// Eşleşme kabul durumunu al
+  Future<Result<Map<String, dynamic>>> getMatchAcceptStatus(String roomId);
 
   /// Kullanıcı ara
   Future<Result<List<UserSearchResult>>> searchUsers(String query);

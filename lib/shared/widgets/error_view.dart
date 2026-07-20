@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../core/theme/app_colors.dart';
+
 class ErrorView extends StatelessWidget {
   const ErrorView({
     super.key,
@@ -20,21 +22,21 @@ class ErrorView extends StatelessWidget {
           children: <Widget>[
             const Icon(
               Icons.error_outline_rounded,
-              color: Colors.orangeAccent,
+              color: AppColors.warning,
               size: 40,
             ),
             const SizedBox(height: 12),
             Text(
               message,
               textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.white70),
+              style: const TextStyle(color: AppColors.textMedium),
             ),
             if (onRetry != null) ...<Widget>[
               const SizedBox(height: 16),
               ElevatedButton(
                 onPressed: onRetry,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.redAccent,
+                  backgroundColor: AppColors.primary,
                 ),
                 child: const Text('Tekrar Dene'),
               ),

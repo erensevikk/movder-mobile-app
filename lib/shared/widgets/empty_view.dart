@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../core/theme/app_colors.dart';
+
 class EmptyView extends StatelessWidget {
   const EmptyView({
     super.key,
@@ -22,14 +24,14 @@ class EmptyView extends StatelessWidget {
           children: <Widget>[
             const Icon(
               Icons.inbox_outlined,
-              color: Colors.white38,
+              color: AppColors.textMedium,
               size: 48,
             ),
             const SizedBox(height: 16),
             Text(
               title,
               style: const TextStyle(
-                color: Colors.white,
+                color: AppColors.textHigh,
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
               ),
@@ -39,7 +41,7 @@ class EmptyView extends StatelessWidget {
               message,
               textAlign: TextAlign.center,
               style: const TextStyle(
-                color: Colors.white54,
+                color: AppColors.textMedium,
                 height: 1.4,
               ),
             ),

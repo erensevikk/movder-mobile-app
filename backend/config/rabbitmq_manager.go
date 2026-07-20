@@ -134,6 +134,14 @@ func (m *RabbitMQManager) Connect() error {
 		// DLX kurulumu başarısız olsa da devam edebilir
 	}
 
+	m.mu.Unlock() // Mutex'i geçici olarak serbest bırak (DeclareQueue GetPublishChannel'da okuma kilidi istiyor)
+
+	// CSV import queue
+	if _, err := m.DeclareCSVImportQueue(); err != nil {
+		log.Printf("⚠️ CSV Import kuyruğu oluşturulamadı: %v", err)
+	}
+
+	m.mu.Lock() // Defer panic yapmaması için tekrar kilitle
 	return nil
 }
 
@@ -601,6 +609,17 @@ type PublishOptions struct {
 
 // PublishOption publish seçeneği
 type PublishOption func(*PublishOptions)
+
+// DeclareCSVImportQueue CSV import kuyruğunu declare eder
+func (m *RabbitMQManager) DeclareCSVImportQueue() (amqp.Queue, error) {
+	args := amqp.Table{
+		"x-dead-letter-exchange":    "movder.dlx",
+		"x-dead-letter-routing-key": "csv_import.dead",
+	}
+
+	return m.DeclareQueue("csv_import_queue", true, false, args)
+}
+
 
 // WithMessageID mesaj ID'si ekler
 func WithMessageID(id string) PublishOption {

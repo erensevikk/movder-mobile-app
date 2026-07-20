@@ -10,12 +10,18 @@ class NotificationsViewModel extends BaseViewModel {
   ViewStatus status = ViewStatus.initial;
   List<NotificationItemModel> notifications = <NotificationItemModel>[];
 
+  bool get isLoggedIn => AppScope.instance.authStorage.isLoggedIn;
+
   @override
   Future<void> initialize() async {
-    await load();
+    if (isLoggedIn) {
+      await load();
+    }
   }
 
   Future<void> load() async {
+    if (!isLoggedIn) return;
+
     status = ViewStatus.loading;
     notifyListeners();
 

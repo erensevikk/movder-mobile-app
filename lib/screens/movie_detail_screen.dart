@@ -387,7 +387,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           ),
           child: IconButton(
             onPressed: () {
-              // TODO: İleride "Hangi listeye eklemek istersiniz?" bottom sheet'i açılacak
+              // todo: İleride "Hangi listeye eklemek istersiniz?" bottom sheet'i açılacak
               // ignore: todo
             },
             icon: const Icon(

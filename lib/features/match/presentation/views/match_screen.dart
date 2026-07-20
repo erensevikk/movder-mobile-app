@@ -3,11 +3,13 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
 import '../../../../core/mixins/view_effect_listener_mixin.dart';
+import '../../../../core/theme/app_colors.dart';
 import '../../../../core/mixins/view_model_binding_mixin.dart';
 import '../../../../features/profile/presentation/views/user_detail_screen.dart';
 import '../../../../services/api_service.dart';
 import '../../data/models/match_model.dart';
 import '../../data/services/match_repository_impl.dart';
+import '../../data/services/match_websocket_service.dart';
 import '../view_models/match_screen_view_model.dart';
 
 class MatchScreen extends StatefulWidget {
@@ -22,7 +24,6 @@ class MatchScreenState extends State<MatchScreen>
         TickerProviderStateMixin,
         ViewModelBindingMixin<MatchScreen, MatchScreenViewModel>,
         ViewEffectListenerMixin<MatchScreen, MatchScreenViewModel> {
-
   void setVisibility(bool visible) {
     viewModel.setVisibility(visible);
     if (visible && _slideshowActive) {
@@ -43,6 +44,7 @@ class MatchScreenState extends State<MatchScreen>
   @override
   MatchScreenViewModel createViewModel() => MatchScreenViewModel(
         repository: MatchRepositoryImpl(),
+        wsService: MatchWebSocketService(),
       );
 
   late AnimationController _pulseController;
@@ -147,7 +149,9 @@ class MatchScreenState extends State<MatchScreen>
     }
     // Also add watching movie if not already there
     final watchingPoster = viewModel.watchingMovie?.posterPath?.trim() ?? '';
-    if (posters.length < 5 && watchingPoster.isNotEmpty && !posters.contains(watchingPoster)) {
+    if (posters.length < 5 &&
+        watchingPoster.isNotEmpty &&
+        !posters.contains(watchingPoster)) {
       posters.add(watchingPoster);
     }
     return posters.take(5).toList();
@@ -206,14 +210,13 @@ class MatchScreenState extends State<MatchScreen>
       final nextUrl = _posterUrl(nextPosterPath);
 
       Widget buildPoster(String url) {
-        if (url.isEmpty) return Container(color: const Color(0xFF0F0F0F));
+        if (url.isEmpty) return Container(color: AppColors.background);
         return CachedNetworkImage(
           imageUrl: url,
           fit: BoxFit.cover,
           filterQuality: FilterQuality.low,
-          errorWidget: (_, __, ___) =>
-              Container(color: const Color(0xFF0F0F0F)),
-          placeholder: (_, __) => Container(color: const Color(0xFF0F0F0F)),
+          errorWidget: (_, __, ___) => Container(color: AppColors.background),
+          placeholder: (_, __) => Container(color: AppColors.background),
         );
       }
 
@@ -246,14 +249,13 @@ class MatchScreenState extends State<MatchScreen>
           imageUrl: _posterUrl(vm.watchingMovie!.posterPath!),
           fit: BoxFit.cover,
           filterQuality: FilterQuality.low,
-          errorWidget: (_, __, ___) =>
-              Container(color: const Color(0xFF0F0F0F)),
-          placeholder: (_, __) => Container(color: const Color(0xFF0F0F0F)),
+          errorWidget: (_, __, ___) => Container(color: AppColors.background),
+          placeholder: (_, __) => Container(color: AppColors.background),
         ),
       );
     }
 
-    return Container(color: const Color(0xFF0F0F0F));
+    return Container(color: AppColors.background);
   }
 
   @override
@@ -265,28 +267,19 @@ class MatchScreenState extends State<MatchScreen>
     }
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0F0F0F),
+      backgroundColor: AppColors.background,
       body: Stack(
         fit: StackFit.expand,
         children: [
           _buildBackground(vm),
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            height: MediaQuery.of(context).padding.top,
-            child: Container(
-              color: const Color(0xFF0F0F0F),
-            ),
-          ),
           Container(
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
                 colors: [
-                  Colors.black.withValues(alpha: 0.72),
-                  Colors.black.withValues(alpha: 0.86),
+                  AppColors.overlay.withValues(alpha: 0.72),
+                  AppColors.overlay.withValues(alpha: 0.86),
                 ],
               ),
             ),
@@ -302,12 +295,13 @@ class MatchScreenState extends State<MatchScreen>
                       child: TextField(
                         controller: vm.userSearchController,
                         onChanged: vm.onUserSearchChanged,
-                        style: const TextStyle(color: Colors.white),
+                        style: const TextStyle(color: AppColors.textHigh),
                         decoration: InputDecoration(
                           hintText: 'Kullanıcı adı ile ara...',
-                          hintStyle: const TextStyle(color: Colors.white54),
-                          prefixIcon:
-                              const Icon(Icons.search, color: Colors.white70),
+                          hintStyle:
+                              const TextStyle(color: AppColors.textMedium),
+                          prefixIcon: const Icon(Icons.search,
+                              color: AppColors.textMedium),
                           suffixIcon: vm.userSearchController.text.isNotEmpty
                               ? GestureDetector(
                                   onTap: () {
@@ -315,11 +309,11 @@ class MatchScreenState extends State<MatchScreen>
                                     vm.onUserSearchChanged('');
                                   },
                                   child: const Icon(Icons.close,
-                                      color: Colors.white54, size: 18),
+                                      color: AppColors.textMedium, size: 18),
                                 )
                               : null,
                           filled: true,
-                          fillColor: Colors.white.withValues(alpha: 0.10),
+                          fillColor: AppColors.textHigh.withValues(alpha: 0.10),
                           contentPadding: const EdgeInsets.symmetric(
                               horizontal: 14, vertical: 12),
                           border: OutlineInputBorder(
@@ -333,12 +327,12 @@ class MatchScreenState extends State<MatchScreen>
                     const Text(
                       'Birlikte İzle',
                       style: TextStyle(
-                        color: Colors.white,
+                        color: AppColors.textHigh,
                         fontSize: 28,
                         fontWeight: FontWeight.bold,
                         shadows: [
                           Shadow(
-                            color: Colors.black54,
+                            color: AppColors.overlay,
                             blurRadius: 8,
                             offset: Offset(0, 2),
                           ),
@@ -350,20 +344,20 @@ class MatchScreenState extends State<MatchScreen>
                       padding: const EdgeInsets.symmetric(
                           horizontal: 16, vertical: 8),
                       decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.16),
+                        color: AppColors.textHigh.withValues(alpha: 0.16),
                         borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: Colors.white12),
+                        border: Border.all(color: AppColors.divider),
                       ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           const Icon(Icons.people_alt_outlined,
-                              color: Colors.greenAccent, size: 20),
+                              color: AppColors.success, size: 20),
                           const SizedBox(width: 8),
                           Text(
                             'Şu an ${vm.queueCount} kişi eşleşmeyi bekliyor',
                             style: const TextStyle(
-                              color: Colors.white70,
+                              color: AppColors.textMedium,
                               fontSize: 14,
                               fontWeight: FontWeight.w500,
                             ),
@@ -457,7 +451,7 @@ class MatchScreenState extends State<MatchScreen>
                                     '${vm.watchingMovie!.title} filmi için eşleşme aranıyor ${'.' * _dotCount}',
                                     textAlign: TextAlign.center,
                                     style: const TextStyle(
-                                      color: Colors.white,
+                                      color: AppColors.textHigh,
                                       fontSize: 14,
                                       fontWeight: FontWeight.w600,
                                     ),
@@ -472,7 +466,7 @@ class MatchScreenState extends State<MatchScreen>
                                     'Eşleşme aramak için lütfen izlemekte olduğunuz bir filmi seçiniz.',
                                     textAlign: TextAlign.center,
                                     style: TextStyle(
-                                      color: Colors.white70,
+                                      color: AppColors.textMedium,
                                       fontSize: 14,
                                       fontWeight: FontWeight.w500,
                                     ),
@@ -489,24 +483,24 @@ class MatchScreenState extends State<MatchScreen>
                                   padding: const EdgeInsets.symmetric(
                                       horizontal: 16, vertical: 12),
                                   decoration: BoxDecoration(
-                                    color: Colors.redAccent
+                                    color: AppColors.primary
                                         .withValues(alpha: 0.14),
                                     borderRadius: BorderRadius.circular(16),
                                     border: Border.all(
-                                        color: Colors.redAccent
+                                        color: AppColors.primary
                                             .withValues(alpha: 0.45)),
                                   ),
                                   child: Row(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
                                       const Icon(Icons.play_circle_fill,
-                                          color: Colors.redAccent, size: 18),
+                                          color: AppColors.primary, size: 18),
                                       const SizedBox(width: 10),
                                       Flexible(
                                         child: Text(
                                           'Aktif Durum: ${vm.watchingMovie!.title} izliyorsun',
                                           style: const TextStyle(
-                                            color: Colors.white,
+                                            color: AppColors.textHigh,
                                             fontSize: 14,
                                             fontWeight: FontWeight.w700,
                                           ),
@@ -522,28 +516,33 @@ class MatchScreenState extends State<MatchScreen>
                                   width: double.infinity,
                                   height: 60,
                                   child: ElevatedButton(
-                                    onPressed: (!vm.isWatching && !vm.isSearching)
+                                    onPressed: (!vm.isWatching &&
+                                            !vm.isSearching)
                                         ? null
                                         : vm.isSearching
                                             ? vm.cancelSearch
-                                            : () => vm.selectMovie(vm.watchingMovie!, localSearch: vm.isLocalSearch),
+                                            : () => vm.selectMovie(
+                                                vm.watchingMovie!,
+                                                localSearch: vm.isLocalSearch),
                                     style: ElevatedButton.styleFrom(
                                       backgroundColor:
                                           (!vm.isWatching && !vm.isSearching)
-                                              ? Colors.grey[850]
+                                              ? AppColors.surface
                                               : vm.isSearching
-                                                  ? Colors.grey[800]
+                                                  ? AppColors.surface
                                                   : (vm.isLocalSearch
-                                                      ? Colors.blueAccent
-                                                      : Colors.redAccent),
+                                                      ? AppColors.secondary
+                                                      : AppColors.primary),
                                       shadowColor: vm.isSearching ||
-                                              (!vm.isWatching && !vm.isSearching)
+                                              (!vm.isWatching &&
+                                                  !vm.isSearching)
                                           ? Colors.transparent
                                           : (vm.isLocalSearch
-                                              ? Colors.blueAccent
-                                              : Colors.redAccent),
+                                              ? AppColors.secondary
+                                              : AppColors.primary),
                                       elevation: vm.isSearching ||
-                                              (!vm.isWatching && !vm.isSearching)
+                                              (!vm.isWatching &&
+                                                  !vm.isSearching)
                                           ? 0
                                           : 8,
                                       shape: RoundedRectangleBorder(
@@ -556,14 +555,14 @@ class MatchScreenState extends State<MatchScreen>
                                                 MainAxisAlignment.center,
                                             children: [
                                               Icon(Icons.close,
-                                                  color: Colors.white),
+                                                  color: AppColors.textHigh),
                                               SizedBox(width: 12),
                                               Text(
                                                 'Aramayı İptal Et',
                                                 style: TextStyle(
                                                   fontSize: 18,
                                                   fontWeight: FontWeight.bold,
-                                                  color: Colors.white,
+                                                  color: AppColors.textHigh,
                                                 ),
                                               ),
                                             ],
@@ -577,8 +576,8 @@ class MatchScreenState extends State<MatchScreen>
                                                       ? Icons.my_location
                                                       : Icons.search,
                                                   color: (!vm.isWatching)
-                                                      ? Colors.white54
-                                                      : Colors.white),
+                                                      ? AppColors.textMedium
+                                                      : AppColors.textHigh),
                                               const SizedBox(width: 12),
                                               Text(
                                                 vm.isLocalSearch
@@ -588,8 +587,8 @@ class MatchScreenState extends State<MatchScreen>
                                                   fontSize: 18,
                                                   fontWeight: FontWeight.bold,
                                                   color: (!vm.isWatching)
-                                                      ? Colors.white54
-                                                      : Colors.white,
+                                                      ? AppColors.textMedium
+                                                      : AppColors.textHigh,
                                                 ),
                                               ),
                                             ],
@@ -606,7 +605,7 @@ class MatchScreenState extends State<MatchScreen>
                 ),
                 if (vm.userSearchController.text.trim().length >= 2)
                   Positioned(
-                    top: 76, 
+                    top: 76,
                     left: 16,
                     right: 16,
                     child: Material(
@@ -614,12 +613,12 @@ class MatchScreenState extends State<MatchScreen>
                       child: Container(
                         constraints: const BoxConstraints(maxHeight: 220),
                         decoration: BoxDecoration(
-                          color: const Color(0xFF1A1A1A),
+                          color: AppColors.surface,
                           borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.white12),
+                          border: Border.all(color: AppColors.divider),
                           boxShadow: [
                             BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.5),
+                              color: AppColors.overlay.withValues(alpha: 0.5),
                               blurRadius: 16,
                               offset: const Offset(0, 4),
                             ),
@@ -634,7 +633,7 @@ class MatchScreenState extends State<MatchScreen>
                                     height: 20,
                                     child: CircularProgressIndicator(
                                       strokeWidth: 2.4,
-                                      color: Colors.white70,
+                                      color: AppColors.textMedium,
                                     ),
                                   ),
                                 ),
@@ -644,14 +643,15 @@ class MatchScreenState extends State<MatchScreen>
                                     padding: EdgeInsets.all(14),
                                     child: Text(
                                       'Kullanıcı bulunamadı',
-                                      style: TextStyle(color: Colors.white70),
+                                      style: TextStyle(
+                                          color: AppColors.textMedium),
                                     ),
                                   )
                                 : ListView.separated(
                                     shrinkWrap: true,
                                     itemCount: vm.userSearchResults.length,
                                     separatorBuilder: (_, __) => Divider(
-                                        color: Colors.white
+                                        color: AppColors.textHigh
                                             .withValues(alpha: 0.08)),
                                     itemBuilder: (context, index) {
                                       final user = vm.userSearchResults[index];
@@ -664,8 +664,7 @@ class MatchScreenState extends State<MatchScreen>
                                       return ListTile(
                                         dense: true,
                                         leading: CircleAvatar(
-                                          backgroundColor:
-                                              const Color(0xFF2A2A2A),
+                                          backgroundColor: AppColors.surface,
                                           child: hasAvatar
                                               ? ClipOval(
                                                   child: CachedNetworkImage(
@@ -676,32 +675,34 @@ class MatchScreenState extends State<MatchScreen>
                                                     errorWidget: (_, __, ___) =>
                                                         const Icon(
                                                       Icons.person,
-                                                      color: Colors.white54,
+                                                      color:
+                                                          AppColors.textMedium,
                                                       size: 22,
                                                     ),
                                                     placeholder: (_, __) =>
                                                         const Icon(
                                                       Icons.person,
-                                                      color: Colors.white54,
+                                                      color:
+                                                          AppColors.textMedium,
                                                       size: 22,
                                                     ),
                                                   ),
                                                 )
                                               : const Icon(
                                                   Icons.person,
-                                                  color: Colors.white54,
+                                                  color: AppColors.textMedium,
                                                   size: 22,
                                                 ),
                                         ),
                                         title: Text(username,
                                             style: const TextStyle(
-                                                color: Colors.white)),
+                                                color: AppColors.textHigh)),
                                         subtitle: Text(
                                           city.isNotEmpty
                                               ? city
                                               : 'Şehir bilgisi yok',
                                           style: const TextStyle(
-                                              color: Colors.white54),
+                                              color: AppColors.textMedium),
                                         ),
                                         onTap: () {
                                           vm.userSearchController.clear();
@@ -709,10 +710,9 @@ class MatchScreenState extends State<MatchScreen>
                                           Navigator.push(
                                             context,
                                             MaterialPageRoute(
-                                              builder: (_) =>
-                                                  UserDetailScreen(
+                                              builder: (_) => UserDetailScreen(
                                                 userId: userId,
-                                                isMe: false, 
+                                                isMe: false,
                                               ),
                                             ),
                                           );
@@ -726,7 +726,7 @@ class MatchScreenState extends State<MatchScreen>
               ],
             ),
           ),
-          if (vm.status == MatchStatus.found && vm.currentMatch != null)
+          if ((vm.status == MatchStatus.found || vm.status == MatchStatus.accepted) && vm.currentMatch != null)
             MatchFoundOverlayWidget(vm: vm),
         ],
       ),
@@ -769,16 +769,16 @@ class MatchScreenState extends State<MatchScreen>
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     color: isActive
-                        ? Colors.redAccent.withValues(alpha: 0.2)
-                        : const Color(0xFF1E1E1E),
+                        ? AppColors.primary.withValues(alpha: 0.2)
+                        : AppColors.surface,
                     border: Border.all(
-                      color: isActive ? Colors.redAccent : Colors.white24,
+                      color: isActive ? AppColors.primary : AppColors.divider,
                       width: isActive ? 4 : 2,
                     ),
                     boxShadow: isActive
                         ? [
                             BoxShadow(
-                              color: Colors.redAccent.withValues(alpha: 0.4),
+                              color: AppColors.primary.withValues(alpha: 0.4),
                               blurRadius: 25,
                               spreadRadius: 5,
                             )
@@ -790,12 +790,16 @@ class MatchScreenState extends State<MatchScreen>
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Icon(Icons.public,
-                            color: isActive ? Colors.white : Colors.white70,
+                            color: isActive
+                                ? AppColors.textHigh
+                                : AppColors.textMedium,
                             size: isActive ? 54 : 28),
                         SizedBox(height: isActive ? 8 : 4),
                         Text('Genel',
                             style: TextStyle(
-                                color: isActive ? Colors.white : Colors.white70,
+                                color: isActive
+                                    ? AppColors.textHigh
+                                    : AppColors.textMedium,
                                 fontSize: isActive ? 18 : 12,
                                 fontWeight: FontWeight.bold)),
                       ],
@@ -846,16 +850,16 @@ class MatchScreenState extends State<MatchScreen>
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     color: isActive
-                        ? Colors.blueAccent.withValues(alpha: 0.2)
-                        : const Color(0xFF1E1E1E),
+                        ? AppColors.secondary.withValues(alpha: 0.2)
+                        : AppColors.surface,
                     border: Border.all(
-                      color: isActive ? Colors.blueAccent : Colors.white24,
+                      color: isActive ? AppColors.secondary : AppColors.divider,
                       width: isActive ? 4 : 2,
                     ),
                     boxShadow: isActive
                         ? [
                             BoxShadow(
-                              color: Colors.blueAccent.withValues(alpha: 0.4),
+                              color: AppColors.secondary.withValues(alpha: 0.4),
                               blurRadius: 25,
                               spreadRadius: 5,
                             )
@@ -867,12 +871,16 @@ class MatchScreenState extends State<MatchScreen>
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Icon(Icons.location_city,
-                            color: isActive ? Colors.white : Colors.white70,
+                            color: isActive
+                                ? AppColors.textHigh
+                                : AppColors.textMedium,
                             size: isActive ? 54 : 28),
                         SizedBox(height: isActive ? 8 : 4),
                         Text(_userCity.isNotEmpty ? _userCity : 'Şehrimde',
                             style: TextStyle(
-                                color: isActive ? Colors.white : Colors.white70,
+                                color: isActive
+                                    ? AppColors.textHigh
+                                    : AppColors.textMedium,
                                 fontSize: isActive ? 18 : 12,
                                 fontWeight: FontWeight.bold)),
                       ],
@@ -897,7 +905,8 @@ class MatchFoundOverlayWidget extends StatefulWidget {
   });
 
   @override
-  State<MatchFoundOverlayWidget> createState() => _MatchFoundOverlayWidgetState();
+  State<MatchFoundOverlayWidget> createState() =>
+      _MatchFoundOverlayWidgetState();
 }
 
 class _MatchFoundOverlayWidgetState extends State<MatchFoundOverlayWidget>
@@ -919,7 +928,8 @@ class _MatchFoundOverlayWidgetState extends State<MatchFoundOverlayWidget>
       vsync: this,
       duration: const Duration(milliseconds: 600),
     );
-    _fadeIn = CurvedAnimation(parent: _entranceController, curve: Curves.easeOut);
+    _fadeIn =
+        CurvedAnimation(parent: _entranceController, curve: Curves.easeOut);
     _slideUp = Tween<double>(begin: 60, end: 0).animate(
       CurvedAnimation(parent: _entranceController, curve: Curves.easeOutCubic),
     );
@@ -929,12 +939,14 @@ class _MatchFoundOverlayWidgetState extends State<MatchFoundOverlayWidget>
   }
 
   void _startCountdown() {
-    _countdownTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
+    _countdownTimer =
+        Timer.periodic(const Duration(milliseconds: 100), (timer) {
       if (!mounted) {
         timer.cancel();
         return;
       }
-      final elapsed = (_totalSeconds * 1000 - timer.tick * 100).clamp(0, _totalSeconds * 1000); 
+      final elapsed = (_totalSeconds * 1000 - timer.tick * 100)
+          .clamp(0, _totalSeconds * 1000);
       setState(() {
         _progress = elapsed / (_totalSeconds * 1000);
       });
@@ -942,7 +954,7 @@ class _MatchFoundOverlayWidgetState extends State<MatchFoundOverlayWidget>
         timer.cancel();
         if (_accepted) return;
         if (mounted) {
-           widget.vm.rejectMatch();
+          widget.vm.rejectMatch();
         }
       }
     });
@@ -988,12 +1000,12 @@ class _MatchFoundOverlayWidgetState extends State<MatchFoundOverlayWidget>
       height: size,
       decoration: const BoxDecoration(
         shape: BoxShape.circle,
-        color: Color(0xFF1E1E1E),
+        color: AppColors.surface,
       ),
       child: Icon(
         Icons.person,
         size: size * 0.52,
-        color: Colors.white54,
+        color: AppColors.textMedium,
       ),
     );
   }
@@ -1002,12 +1014,18 @@ class _MatchFoundOverlayWidgetState extends State<MatchFoundOverlayWidget>
   Widget build(BuildContext context) {
     final match = widget.vm.currentMatch;
     if (match == null) return const SizedBox.shrink();
-    
+
     final movieName = match.movie.title;
-    final posterUrl = match.movie.posterPath != null ? 'https://image.tmdb.org/t/p/w780${match.movie.posterPath}' : null;
+    final posterUrl = match.movie.posterPath != null
+        ? 'https://image.tmdb.org/t/p/w780${match.movie.posterPath}'
+        : null;
     final otherUserName = match.username;
-    final otherAvatarUrl = match.avatarUrl?.startsWith('http') == true ? match.avatarUrl : (match.avatarUrl != null ? '${ApiService.baseUrl}${match.avatarUrl}' : null);
-    final myAvatarUrl = widget.vm.myAvatarUrl; 
+    final otherAvatarUrl = match.avatarUrl?.startsWith('http') == true
+        ? match.avatarUrl
+        : (match.avatarUrl != null
+            ? '${ApiService.baseUrl}${match.avatarUrl}'
+            : null);
+    final myAvatarUrl = widget.vm.myAvatarUrl;
 
     return Material(
       color: Colors.transparent,
@@ -1017,7 +1035,7 @@ class _MatchFoundOverlayWidgetState extends State<MatchFoundOverlayWidget>
           GestureDetector(
             onTap: () {},
             child: Container(
-              color: Colors.black.withValues(alpha: 0.85),
+              color: AppColors.overlay.withValues(alpha: 0.85),
             ),
           ),
           if (posterUrl != null && posterUrl.isNotEmpty)
@@ -1046,7 +1064,7 @@ class _MatchFoundOverlayWidgetState extends State<MatchFoundOverlayWidget>
                     const Text(
                       '🎉 Eşleşme Bulundu!',
                       style: TextStyle(
-                        color: Colors.white,
+                        color: AppColors.textHigh,
                         fontSize: 26,
                         fontWeight: FontWeight.w800,
                         letterSpacing: 0.5,
@@ -1056,7 +1074,7 @@ class _MatchFoundOverlayWidgetState extends State<MatchFoundOverlayWidget>
                     Text(
                       '$movieName izlerken eşleştin',
                       style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.55),
+                        color: AppColors.textHigh.withValues(alpha: 0.55),
                         fontSize: 14,
                         fontWeight: FontWeight.w500,
                       ),
@@ -1073,8 +1091,8 @@ class _MatchFoundOverlayWidgetState extends State<MatchFoundOverlayWidget>
                                 shape: BoxShape.circle,
                                 gradient: LinearGradient(
                                   colors: [
-                                    Color(0xFFE53935),
-                                    Color(0xFFFF6F60)
+                                    AppColors.primary,
+                                    AppColors.tertiary,
                                   ],
                                 ),
                               ),
@@ -1084,7 +1102,7 @@ class _MatchFoundOverlayWidgetState extends State<MatchFoundOverlayWidget>
                             const Text(
                               'Sen',
                               style: TextStyle(
-                                color: Colors.white,
+                                color: AppColors.textHigh,
                                 fontWeight: FontWeight.w600,
                                 fontSize: 14,
                               ),
@@ -1098,15 +1116,16 @@ class _MatchFoundOverlayWidgetState extends State<MatchFoundOverlayWidget>
                               Container(
                                 padding: const EdgeInsets.symmetric(
                                     horizontal: 12, vertical: 6),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withValues(alpha: 0.08),
-                                    borderRadius: BorderRadius.circular(20),
-                                    border: Border.all(color: Colors.white12),
-                                  ),
-                                  child: const Text(
-                                    '❤️',
-                                    style: TextStyle(fontSize: 24),
-                                  ),
+                                decoration: BoxDecoration(
+                                  color: AppColors.textHigh
+                                      .withValues(alpha: 0.08),
+                                  borderRadius: BorderRadius.circular(20),
+                                  border: Border.all(color: AppColors.divider),
+                                ),
+                                child: const Text(
+                                  '❤️',
+                                  style: TextStyle(fontSize: 24),
+                                ),
                               ),
                             ],
                           ),
@@ -1119,8 +1138,8 @@ class _MatchFoundOverlayWidgetState extends State<MatchFoundOverlayWidget>
                                 shape: BoxShape.circle,
                                 gradient: LinearGradient(
                                   colors: [
-                                    Color(0xFF1565C0),
-                                    Color(0xFF42A5F5)
+                                    AppColors.secondary,
+                                    AppColors.tertiary,
                                   ],
                                 ),
                               ),
@@ -1130,7 +1149,7 @@ class _MatchFoundOverlayWidgetState extends State<MatchFoundOverlayWidget>
                             Text(
                               otherUserName,
                               style: const TextStyle(
-                                color: Colors.white,
+                                color: AppColors.textHigh,
                                 fontWeight: FontWeight.w600,
                                 fontSize: 14,
                               ),
@@ -1148,7 +1167,7 @@ class _MatchFoundOverlayWidgetState extends State<MatchFoundOverlayWidget>
                             : '$otherUserName ile sohbet etmek ister misin?',
                         textAlign: TextAlign.center,
                         style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.8),
+                          color: AppColors.textHigh.withValues(alpha: 0.8),
                           fontSize: 15,
                           height: 1.5,
                         ),
@@ -1163,9 +1182,11 @@ class _MatchFoundOverlayWidgetState extends State<MatchFoundOverlayWidget>
                             child: OutlinedButton(
                               onPressed: _reject,
                               style: OutlinedButton.styleFrom(
-                                foregroundColor: Colors.white,
-                                side: const BorderSide(color: Colors.white24),
-                                padding: const EdgeInsets.symmetric(vertical: 18),
+                                foregroundColor: AppColors.textHigh,
+                                side:
+                                    const BorderSide(color: AppColors.divider),
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 18),
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(16),
                                 ),
@@ -1184,14 +1205,18 @@ class _MatchFoundOverlayWidgetState extends State<MatchFoundOverlayWidget>
                             child: ElevatedButton(
                               onPressed: _accept,
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: _accepted ? Colors.green : Colors.redAccent,
-                                foregroundColor: Colors.white,
+                                backgroundColor: _accepted
+                                    ? AppColors.success
+                                    : AppColors.primary,
+                                foregroundColor: AppColors.textHigh,
                                 elevation: _accepted ? 0 : 8,
-                                padding: const EdgeInsets.symmetric(vertical: 18),
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 18),
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(16),
                                 ),
-                                shadowColor: Colors.redAccent.withValues(alpha: 0.5),
+                                shadowColor:
+                                    AppColors.primary.withValues(alpha: 0.5),
                               ),
                               child: Text(
                                 _accepted ? 'Bekleniyor...' : 'Kabul Et',
@@ -1212,8 +1237,11 @@ class _MatchFoundOverlayWidgetState extends State<MatchFoundOverlayWidget>
                         borderRadius: BorderRadius.circular(4),
                         child: LinearProgressIndicator(
                           value: _progress,
-                          backgroundColor: Colors.white.withValues(alpha: 0.1),
-                          color: _progress > 0.3 ? Colors.greenAccent : Colors.redAccent,
+                          backgroundColor:
+                              AppColors.textHigh.withValues(alpha: 0.1),
+                          color: _progress > 0.3
+                              ? AppColors.success
+                              : AppColors.warning,
                           minHeight: 6,
                         ),
                       ),

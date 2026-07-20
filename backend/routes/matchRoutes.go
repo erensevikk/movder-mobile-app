@@ -17,5 +17,6 @@ func MatchRoutes(r *gin.Engine) {
 		match.POST("/accept", controllers.AcceptMatch())           // Eşleşmeyi kabul et
 		match.POST("/reject", controllers.RejectMatch())           // Eşleşmeyi reddet
 		match.GET("/accept-status", controllers.GetAcceptStatus()) // Kabul durumunu sorgula
+		match.GET("/ws", controllers.HandleMatchWebSocket())       // WebSocket Eşleşme (YENİ)
 	}
 }

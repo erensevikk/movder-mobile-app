@@ -76,6 +76,14 @@ class ChatDetailViewModel extends BaseViewModel {
 
     if (result.isSuccess) {
       _messages = result.data ?? [];
+      _messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+
+      final first = _messages.isNotEmpty ? _messages.first : null;
+      final last = _messages.isNotEmpty ? _messages.last : null;
+      final monotonic = _isMonotonicAscending(_messages);
+      debugPrint(
+        '[CHAT-DIAG][DETAIL][LOAD] roomId=$_roomId messageCount=${_messages.length} first={id:${first?.id}, isMe:${first?.isMe}, time:${first?.timestamp.toIso8601String()}} last={id:${last?.id}, isMe:${last?.isMe}, text:"${last?.text}", time:${last?.timestamp.toIso8601String()}, status:${last?.status}} sortedAscending=$monotonic',
+      );
     } else {
       emitEffect(ShowSnackbarEffect(
         message: result.failure?.message ?? 'Mesajlar yüklenemedi',
@@ -97,6 +105,10 @@ class ChatDetailViewModel extends BaseViewModel {
     final text = messageController.text.trim();
     if (text.isEmpty || _isSending) return;
 
+    debugPrint(
+      '[CHAT-DIAG][DETAIL][SEND_START] roomId=$_roomId textLen=${text.length} text="$text" currentMessageCount=${_messages.length}',
+    );
+
     _isSending = true;
     messageController.clear();
     notifyListeners();
@@ -111,10 +123,18 @@ class ChatDetailViewModel extends BaseViewModel {
       status: MessageStatus.pending,
     );
     _messages.add(tempMessage);
+    _messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    final tempMonotonic = _isMonotonicAscending(_messages);
+    debugPrint(
+      '[CHAT-DIAG][DETAIL][SEND_TEMP] roomId=$_roomId messageCount=${_messages.length} sortedAscending=$tempMonotonic',
+    );
     notifyListeners();
 
     // API çağrısı yap
     final result = await _repository.sendMessage(_roomId, text);
+    debugPrint(
+      '[CHAT-DIAG][DETAIL][SEND_RESULT] roomId=$_roomId success=${result.isSuccess} failure=${result.failure?.message}',
+    );
 
     _isSending = false;
 
@@ -139,7 +159,25 @@ class ChatDetailViewModel extends BaseViewModel {
         );
       }
     }
+
+    _messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    final finalFirst = _messages.isNotEmpty ? _messages.first : null;
+    final finalLast = _messages.isNotEmpty ? _messages.last : null;
+    final finalMonotonic = _isMonotonicAscending(_messages);
+    debugPrint(
+      '[CHAT-DIAG][DETAIL][SEND_DONE] roomId=$_roomId messageCount=${_messages.length} first={id:${finalFirst?.id}, time:${finalFirst?.timestamp.toIso8601String()}} last={id:${finalLast?.id}, isMe:${finalLast?.isMe}, text:"${finalLast?.text}", time:${finalLast?.timestamp.toIso8601String()}, status:${finalLast?.status}} sortedAscending=$finalMonotonic',
+    );
     notifyListeners();
+  }
+
+  bool _isMonotonicAscending(List<ChatMessageModel> list) {
+    if (list.length < 2) return true;
+    for (var i = 1; i < list.length; i++) {
+      if (list[i].timestamp.isBefore(list[i - 1].timestamp)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   void toggleActions() {

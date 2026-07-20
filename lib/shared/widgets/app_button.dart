@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../core/theme/app_colors.dart';
+
 class AppButton extends StatelessWidget {
   const AppButton({
     super.key,
@@ -7,8 +9,8 @@ class AppButton extends StatelessWidget {
     this.onPressed,
     this.isLoading = false,
     this.icon,
-    this.backgroundColor = Colors.redAccent,
-    this.foregroundColor = Colors.white,
+    this.backgroundColor = AppColors.primary,
+    this.foregroundColor = AppColors.textHigh,
   });
 
   final String label;
@@ -38,7 +40,7 @@ class AppButton extends StatelessWidget {
                 height: 22,
                 child: CircularProgressIndicator(
                   strokeWidth: 2.5,
-                  color: Colors.white,
+                  color: AppColors.textHigh,
                 ),
               )
             : Row(

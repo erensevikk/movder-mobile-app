@@ -50,7 +50,7 @@ class PrivacySettingsViewModel extends BaseViewModel {
 
     settings = result.data!;
     emitEffect(
-        const ShowSnackbarEffect(message: 'Gizlilik ayarlari guncellendi.'));
+        const ShowSnackbarEffect(message: 'Gizlilik ayarları güncellendi.'));
     notifyListeners();
   }
 }

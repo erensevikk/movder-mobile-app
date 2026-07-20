@@ -173,7 +173,8 @@ class ChatDetailScreenState extends State<ChatDetailScreen>
       decoration: BoxDecoration(
         color: const Color(0xFF0F0F0F),
         border: Border(
-          bottom: BorderSide(color: Colors.white.withValues(alpha: 0.1), width: 0.5),
+          bottom: BorderSide(
+              color: Colors.white.withValues(alpha: 0.1), width: 0.5),
         ),
       ),
       child: Row(
@@ -197,28 +198,29 @@ class ChatDetailScreenState extends State<ChatDetailScreen>
                   color: const Color(0xFF1E1E1E),
                 ),
                 child: ClipOval(
-                  child: (vm.avatarUrl != null && vm.avatarUrl!.trim().isNotEmpty)
-                      ? CachedNetworkImage(
-                          imageUrl: vm.avatarUrl!,
-                          fit: BoxFit.cover,
-                          placeholder: (_, __) => const Center(
-                            child: Icon(
+                  child:
+                      (vm.avatarUrl != null && vm.avatarUrl!.trim().isNotEmpty)
+                          ? CachedNetworkImage(
+                              imageUrl: vm.avatarUrl!,
+                              fit: BoxFit.cover,
+                              placeholder: (_, __) => const Center(
+                                child: Icon(
+                                  Icons.person,
+                                  color: Colors.white38,
+                                  size: 22,
+                                ),
+                              ),
+                              errorWidget: (_, __, ___) => const Icon(
+                                Icons.person,
+                                color: Colors.white54,
+                                size: 22,
+                              ),
+                            )
+                          : const Icon(
                               Icons.person,
-                              color: Colors.white38,
+                              color: Colors.white54,
                               size: 22,
                             ),
-                          ),
-                          errorWidget: (_, __, ___) => const Icon(
-                            Icons.person,
-                            color: Colors.white54,
-                            size: 22,
-                          ),
-                        )
-                      : const Icon(
-                          Icons.person,
-                          color: Colors.white54,
-                          size: 22,
-                        ),
                 ),
               ),
               if (vm.isOnline)
@@ -231,7 +233,8 @@ class ChatDetailScreenState extends State<ChatDetailScreen>
                     decoration: BoxDecoration(
                       color: Colors.greenAccent,
                       shape: BoxShape.circle,
-                      border: Border.all(color: const Color(0xFF0F0F0F), width: 2),
+                      border:
+                          Border.all(color: const Color(0xFF0F0F0F), width: 2),
                     ),
                   ),
                 ),
@@ -349,7 +352,8 @@ class ChatDetailScreenState extends State<ChatDetailScreen>
                 PopupMenuItem<String>(
                   value: 'remove_friend',
                   child: SizedBox(
-                    width: (_friendsMenuWidth ?? 0) > 0 ? _friendsMenuWidth : null,
+                    width:
+                        (_friendsMenuWidth ?? 0) > 0 ? _friendsMenuWidth : null,
                     child: const Text(
                       'Arkadaşı sil',
                       style: TextStyle(
@@ -364,7 +368,8 @@ class ChatDetailScreenState extends State<ChatDetailScreen>
               child: AnimatedContainer(
                 key: _friendsMenuAnchorKey,
                 duration: const Duration(milliseconds: 300),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 decoration: BoxDecoration(
                   color: Colors.greenAccent.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(10),
@@ -375,7 +380,8 @@ class ChatDetailScreenState extends State<ChatDetailScreen>
                 child: const Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.check_rounded, size: 16, color: Colors.greenAccent),
+                    Icon(Icons.check_rounded,
+                        size: 16, color: Colors.greenAccent),
                     SizedBox(width: 4),
                     Text(
                       'Arkadaşlar',
@@ -403,19 +409,23 @@ class ChatDetailScreenState extends State<ChatDetailScreen>
               },
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 300),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 decoration: BoxDecoration(
-                  color: _getFriendButtonColor(vm.friendStatus).withValues(alpha: 0.12),
+                  color: _getFriendButtonColor(vm.friendStatus)
+                      .withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(
-                    color: _getFriendButtonColor(vm.friendStatus).withValues(alpha: 0.4),
+                    color: _getFriendButtonColor(vm.friendStatus)
+                        .withValues(alpha: 0.4),
                   ),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(_getFriendButtonIcon(vm.friendStatus),
-                        size: 16, color: _getFriendButtonColor(vm.friendStatus)),
+                        size: 16,
+                        color: _getFriendButtonColor(vm.friendStatus)),
                     const SizedBox(width: 4),
                     Text(
                       _getFriendButtonLabel(vm.friendStatus),
@@ -572,12 +582,11 @@ class ChatDetailScreenState extends State<ChatDetailScreen>
   // ── MESAJ LİSTESİ ─────────────────────────────────────────
   Widget _buildMessageList(ChatDetailViewModel vm) {
     return ListView.builder(
-      reverse: true,
+      reverse: false,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       itemCount: vm.messages.length,
       itemBuilder: (context, index) {
-        // Reverse indexing due to reverse: true in ListView
-        final msg = vm.messages[vm.messages.length - 1 - index];
+        final msg = vm.messages[index];
         final bool isMe = msg.isMe;
         final String text = msg.text;
         final String time =
@@ -659,10 +668,10 @@ class ChatDetailScreenState extends State<ChatDetailScreen>
                     padding: const EdgeInsets.only(top: 4),
                     child: GestureDetector(
                       onTap: () {
-                         // Send message text again from input if failed.
-                         // For simplicity, we can load it to the controller.
-                         vm.messageController.text = text;
-                         vm.sendMessage();
+                        // Send message text again from input if failed.
+                        // For simplicity, we can load it to the controller.
+                        vm.messageController.text = text;
+                        vm.sendMessage();
                       },
                       child: const Text(
                         'Tekrar gönder',
@@ -685,7 +694,8 @@ class ChatDetailScreenState extends State<ChatDetailScreen>
   // ── BOŞ SOHBET DURUMU ─────────────────────────────────────
   Widget _buildEmptyState(ChatDetailViewModel vm) {
     if (vm.isLoading) {
-       return const Center(child: CircularProgressIndicator(color: Colors.redAccent));
+      return const Center(
+          child: CircularProgressIndicator(color: Colors.redAccent));
     }
     return Center(
       child: Padding(
@@ -758,8 +768,8 @@ class ChatDetailScreenState extends State<ChatDetailScreen>
             children: _quickMessages.map((msg) {
               return GestureDetector(
                 onTap: () {
-                   vm.messageController.text = msg;
-                   vm.sendMessage();
+                  vm.messageController.text = msg;
+                  vm.sendMessage();
                 },
                 child: Container(
                   padding:

@@ -24,7 +24,11 @@ func ListRoutes(r *gin.Engine) {
 		lists.PUT("/:listId/rename", controllers.RenameList())                    // Liste adını değiştir
 		lists.PUT("/:listId/reorder", controllers.ReorderList())                  // Liste film sırasını güncelle
 
-		lists.POST("/import/preview", controllers.PreviewLetterboxdImport()) // Letterboxd ZIP/CSV önizleme
-		lists.POST("/import/commit", controllers.CommitLetterboxdImport())   // Letterboxd import commit
+		// /api/lists/import/letterboxd/preview -> upload ZIP/CSV
+		lists.POST("/import/letterboxd/preview", controllers.PreviewLetterboxdImport())
+		// /api/lists/import/letterboxd -> actual start of worker task
+		lists.POST("/import/letterboxd", controllers.StartLetterboxdImport())
+		// Status takibi için yeni endpoint
+		lists.GET("/import/status/:jobId", controllers.GetImportProgress())
 	}
 }

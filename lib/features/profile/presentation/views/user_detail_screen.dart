@@ -1,15 +1,22 @@
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../../../app/app_scope.dart';
 import '../../../../core/base/base_state.dart';
 import '../../../../core/mixins/view_effect_listener_mixin.dart';
 import '../../../../core/mixins/view_model_binding_mixin.dart';
+import '../../../../models/movie.dart';
 import '../../../../shared/widgets/error_view.dart';
 import '../../../../shared/widgets/loading_view.dart';
+import '../../../../core/theme/app_colors.dart';
+import '../../data/models/movie_list_model.dart';
 import '../../../lists/presentation/views/create_list_screen.dart';
 import '../../../lists/presentation/views/list_detail_screen.dart';
 import '../view_models/user_detail_view_model.dart';
+import 'match_history_full_list_screen.dart';
 
 class UserDetailScreen extends StatefulWidget {
   const UserDetailScreen({
@@ -50,14 +57,14 @@ class _UserDetailScreenState extends State<UserDetailScreen>
   Widget buildWithViewModel(BuildContext context, UserDetailViewModel vm) {
     if (vm.status == ViewStatus.loading) {
       return const Scaffold(
-        backgroundColor: Color(0xFF0F0F0F),
+        backgroundColor: AppColors.background,
         body: LoadingView(),
       );
     }
 
     if (vm.status == ViewStatus.error || vm.profile == null) {
       return Scaffold(
-        backgroundColor: const Color(0xFF0F0F0F),
+        backgroundColor: AppColors.background,
         appBar: AppBar(backgroundColor: Colors.transparent),
         body: ErrorView(
           message: vm.errorMessage ?? 'Profil bulunamadı.',
@@ -71,14 +78,21 @@ class _UserDetailScreenState extends State<UserDetailScreen>
     }
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0F0F0F),
+      backgroundColor: AppColors.background,
       extendBodyBehindAppBar: true,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        iconTheme: const IconThemeData(color: Colors.white),
+        scrolledUnderElevation: 0,
+        surfaceTintColor: Colors.transparent,
+        shadowColor: Colors.transparent,
+        iconTheme: const IconThemeData(color: AppColors.textHigh),
+        leading: Transform.translate(
+          offset: const Offset(0, -10),
+          child: const BackButton(),
+        ),
         systemOverlayStyle: const SystemUiOverlayStyle(
-          statusBarColor: Color(0xFF0F0F0F),
+          statusBarColor: Colors.transparent,
           statusBarIconBrightness: Brightness.light,
           statusBarBrightness: Brightness.dark,
         ),
@@ -96,9 +110,10 @@ class _UserDetailScreenState extends State<UserDetailScreen>
             SliverToBoxAdapter(
               child: _buildUserListsSection(vm),
             ),
-            SliverToBoxAdapter(
-              child: _buildMatchHistory(),
-            ),
+            if (widget.isMe)
+              SliverToBoxAdapter(
+                child: _buildMatchHistory(vm),
+              ),
             const SliverPadding(padding: EdgeInsets.only(bottom: 50)),
           ],
         ),
@@ -107,7 +122,7 @@ class _UserDetailScreenState extends State<UserDetailScreen>
   }
 
   Widget _buildHeader(UserDetailViewModel vm) {
-    const double coverHeight = 140.0;
+    const double coverHeight = 100.0;
     const double avatarSize = 90.0;
     final topInset = MediaQuery.of(context).padding.top;
     final profile = vm.profile!;
@@ -158,14 +173,7 @@ class _UserDetailScreenState extends State<UserDetailScreen>
               top: 0,
               left: 0,
               right: 0,
-              height: topInset,
-              child: Container(color: const Color(0xFF0F0F0F)),
-            ),
-            Positioned(
-              top: topInset,
-              left: 0,
-              right: 0,
-              height: coverHeight,
+              height: topInset + coverHeight,
               child: GestureDetector(
                 onTap: widget.isMe && vm.isEditMode
                     ? vm.pickCoverImage
@@ -175,7 +183,7 @@ class _UserDetailScreenState extends State<UserDetailScreen>
                 child: Container(
                   decoration: BoxDecoration(
                     gradient: const LinearGradient(
-                      colors: [Color(0xFF1A1A1A), Color(0xFF1A1A1A)],
+                      colors: [AppColors.surface, AppColors.surface],
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
                     ),
@@ -194,21 +202,22 @@ class _UserDetailScreenState extends State<UserDetailScreen>
                             padding: const EdgeInsets.symmetric(
                                 horizontal: 12, vertical: 6),
                             decoration: BoxDecoration(
-                              color: Colors.black45,
+                              color: AppColors.overlay.withValues(alpha: 0.45),
                               borderRadius: BorderRadius.circular(20),
                             ),
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 const Icon(Icons.add_photo_alternate_rounded,
-                                    color: Colors.white70, size: 16),
+                                    color: AppColors.textMedium, size: 16),
                                 const SizedBox(width: 6),
                                 Text(
                                   profile.coverUrl.isNotEmpty
                                       ? 'Kapağı Değiştir'
                                       : 'Kapak Ekle',
                                   style: const TextStyle(
-                                      color: Colors.white70, fontSize: 13),
+                                      color: AppColors.textMedium,
+                                      fontSize: 13),
                                 ),
                               ],
                             ),
@@ -230,15 +239,15 @@ class _UserDetailScreenState extends State<UserDetailScreen>
                   child: Container(
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      color: Colors.black45,
+                      color: AppColors.overlay.withValues(alpha: 0.45),
                       borderRadius: BorderRadius.circular(20),
                       border: Border.all(
-                        color: Colors.redAccent.withValues(alpha: 0.45),
+                        color: AppColors.error.withValues(alpha: 0.45),
                       ),
                     ),
                     child: const Icon(
                       Icons.delete_outline_rounded,
-                      color: Colors.redAccent,
+                      color: AppColors.error,
                       size: 20,
                     ),
                   ),
@@ -256,9 +265,9 @@ class _UserDetailScreenState extends State<UserDetailScreen>
                       height: avatarSize,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        color: const Color(0xFF1E1E1E),
-                        border: Border.all(
-                            color: const Color(0xFF0F0F0F), width: 4),
+                        color: AppColors.surface,
+                        border:
+                            Border.all(color: AppColors.background, width: 4),
                         image: avatarUrl.isNotEmpty
                             ? DecorationImage(
                                 image: CachedNetworkImageProvider(avatarUrl),
@@ -270,7 +279,7 @@ class _UserDetailScreenState extends State<UserDetailScreen>
                           ? const Icon(
                               Icons.person,
                               size: 50,
-                              color: Colors.white54,
+                              color: AppColors.textMedium,
                             )
                           : null,
                     ),
@@ -287,13 +296,12 @@ class _UserDetailScreenState extends State<UserDetailScreen>
                   child: Container(
                     padding: const EdgeInsets.all(6),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF2A2A2A),
+                      color: AppColors.surface,
                       shape: BoxShape.circle,
-                      border:
-                          Border.all(color: const Color(0xFF0F0F0F), width: 3),
+                      border: Border.all(color: AppColors.background, width: 3),
                     ),
                     child: const Icon(Icons.camera_alt_rounded,
-                        color: Colors.white, size: 18),
+                        color: AppColors.textHigh, size: 18),
                   ),
                 ),
               ),
@@ -305,9 +313,9 @@ class _UserDetailScreenState extends State<UserDetailScreen>
                 height: 74,
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 decoration: BoxDecoration(
-                  color: Colors.black,
+                  color: AppColors.background,
                   borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: Colors.white12),
+                  border: Border.all(color: AppColors.divider),
                 ),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -333,7 +341,7 @@ class _UserDetailScreenState extends State<UserDetailScreen>
                 child: Text(
                   profile.username,
                   style: const TextStyle(
-                    color: Colors.white,
+                    color: AppColors.textHigh,
                     fontSize: 24,
                     fontWeight: FontWeight.bold,
                     letterSpacing: -0.5,
@@ -347,14 +355,14 @@ class _UserDetailScreenState extends State<UserDetailScreen>
                     padding:
                         const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF222222),
+                      color: AppColors.surface,
                       borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: Colors.white12),
+                      border: Border.all(color: AppColors.divider),
                     ),
                     child: const Text(
                       'Vazgeç',
                       style: TextStyle(
-                        color: Colors.white54,
+                        color: AppColors.textMedium,
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
                       ),
@@ -368,16 +376,16 @@ class _UserDetailScreenState extends State<UserDetailScreen>
                     padding:
                         const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                     decoration: BoxDecoration(
-                      color: Colors.redAccent.withValues(alpha: 0.15),
+                      color: AppColors.primary.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(20),
                       border: Border.all(
-                        color: Colors.redAccent.withValues(alpha: 0.5),
+                        color: AppColors.primary.withValues(alpha: 0.5),
                       ),
                     ),
                     child: const Text(
                       'Kaydet',
                       style: TextStyle(
-                        color: Colors.redAccent,
+                        color: AppColors.primary,
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
                       ),
@@ -391,14 +399,14 @@ class _UserDetailScreenState extends State<UserDetailScreen>
                     padding:
                         const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF222222),
+                      color: AppColors.surface,
                       borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: Colors.white12),
+                      border: Border.all(color: AppColors.divider),
                     ),
                     child: const Text(
                       'Profili Düzenle',
                       style: TextStyle(
-                        color: Colors.white54,
+                        color: AppColors.textMedium,
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
                       ),
@@ -416,7 +424,7 @@ class _UserDetailScreenState extends State<UserDetailScreen>
                   controller: _descriptionController,
                   onChanged: vm.updateDescription,
                   style: const TextStyle(
-                    color: Colors.white70,
+                    color: AppColors.textMedium,
                     fontSize: 14,
                     height: 1.4,
                   ),
@@ -424,19 +432,19 @@ class _UserDetailScreenState extends State<UserDetailScreen>
                   maxLength: 150,
                   decoration: InputDecoration(
                     hintText: 'Kendinden bahset...',
-                    hintStyle: const TextStyle(color: Colors.white24),
-                    counterStyle: const TextStyle(color: Colors.white24),
+                    hintStyle: const TextStyle(color: AppColors.textMedium),
+                    counterStyle: const TextStyle(color: AppColors.textMedium),
                     filled: true,
-                    fillColor: const Color(0xFF1A1A1A),
+                    fillColor: AppColors.surface,
                     contentPadding: const EdgeInsets.symmetric(
                         horizontal: 12, vertical: 10),
                     enabledBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(10),
-                      borderSide: const BorderSide(color: Colors.white12),
+                      borderSide: const BorderSide(color: AppColors.divider),
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(10),
-                      borderSide: const BorderSide(color: Colors.redAccent),
+                      borderSide: const BorderSide(color: AppColors.primary),
                     ),
                   ),
                 )
@@ -446,10 +454,10 @@ class _UserDetailScreenState extends State<UserDetailScreen>
                       : description,
                   style: TextStyle(
                     color: !vm.canSeeProfileDetails
-                        ? Colors.white54
+                        ? AppColors.textMedium
                         : (description.isNotEmpty
-                            ? Colors.white54
-                            : Colors.white38),
+                            ? AppColors.textMedium
+                            : AppColors.textMedium),
                     fontSize: 14,
                     height: 1.4,
                   ),
@@ -469,7 +477,7 @@ class _UserDetailScreenState extends State<UserDetailScreen>
             const Text(
               'FAVORİ FİLMLER',
               style: TextStyle(
-                color: Colors.white54,
+                color: AppColors.textMedium,
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
                 letterSpacing: 1.2,
@@ -501,7 +509,7 @@ class _UserDetailScreenState extends State<UserDetailScreen>
               const Text(
                 'FAVORİ FİLMLER',
                 style: TextStyle(
-                  color: Colors.white54,
+                  color: AppColors.textMedium,
                   fontSize: 13,
                   fontWeight: FontWeight.w600,
                   letterSpacing: 1.2,
@@ -526,12 +534,12 @@ class _UserDetailScreenState extends State<UserDetailScreen>
                         padding: const EdgeInsets.symmetric(
                             horizontal: 10, vertical: 4),
                         decoration: BoxDecoration(
-                          color: const Color(0xFF1E1E1E),
+                          color: AppColors.surface,
                           borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.white10),
+                          border: Border.all(color: AppColors.divider),
                         ),
                         child: const Icon(Icons.add,
-                            color: Colors.white70, size: 14),
+                            color: AppColors.textMedium, size: 14),
                       ),
                     ),
                     if (favoriteList != null) ...[
@@ -554,7 +562,7 @@ class _UserDetailScreenState extends State<UserDetailScreen>
                         child: const Text(
                           'Listeyi Düzenle',
                           style: TextStyle(
-                            color: Colors.white70,
+                            color: AppColors.textMedium,
                             fontSize: 13,
                             fontWeight: FontWeight.w600,
                           ),
@@ -569,24 +577,24 @@ class _UserDetailScreenState extends State<UserDetailScreen>
           if (!hasContent && widget.isMe && !vm.profile!.letterboxdImported)
             _buildLetterboxdCTA(vm)
           else if (!hasContent && widget.isMe && vm.profile!.letterboxdImported)
-            _buildAddFavoritesButton(vm)
+            _buildAddFavoritesButton(vm, favoriteList)
           else if (!hasContent && !widget.isMe)
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(24),
               decoration: BoxDecoration(
-                color: const Color(0xFF1E1E1E),
+                color: AppColors.surface,
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.white10),
+                border: Border.all(color: AppColors.divider),
               ),
               child: const Column(
                 children: [
                   Icon(Icons.movie_filter_outlined,
-                      color: Colors.white24, size: 48),
+                      color: AppColors.textMedium, size: 48),
                   SizedBox(height: 12),
                   Text(
                     'Henüz favori filmlerini seçmemiş',
-                    style: TextStyle(color: Colors.white54),
+                    style: TextStyle(color: AppColors.textMedium),
                   ),
                 ],
               ),
@@ -604,22 +612,22 @@ class _UserDetailScreenState extends State<UserDetailScreen>
       width: double.infinity,
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
-        color: const Color(0xFF141A1F),
+        color: AppColors.surface,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFF2C3440)),
+        border: Border.all(color: AppColors.divider),
       ),
       child: Column(
         children: [
           const Icon(
             Icons.sync_rounded,
-            color: Color(0xFF40BCF4),
+            color: AppColors.secondary,
             size: 48,
           ),
           const SizedBox(height: 16),
           const Text(
             'Profilin Çok Boş Görünüyor!',
             style: TextStyle(
-              color: Colors.white,
+              color: AppColors.textHigh,
               fontSize: 18,
               fontWeight: FontWeight.bold,
             ),
@@ -629,7 +637,7 @@ class _UserDetailScreenState extends State<UserDetailScreen>
             'Letterboxd hesabını bağlayarak favori filmlerini, son izlediklerini ve incelemelerini Movder profiline taşı.',
             textAlign: TextAlign.center,
             style: TextStyle(
-              color: Colors.white70,
+              color: AppColors.textMedium,
               height: 1.5,
               fontSize: 14,
             ),
@@ -641,8 +649,8 @@ class _UserDetailScreenState extends State<UserDetailScreen>
             child: ElevatedButton(
               onPressed: vm.isImporting ? null : vm.startLetterboxdImport,
               style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF00E054),
-                foregroundColor: Colors.black,
+                backgroundColor: AppColors.success,
+                foregroundColor: AppColors.background,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(8),
                 ),
@@ -664,34 +672,27 @@ class _UserDetailScreenState extends State<UserDetailScreen>
     );
   }
 
-  Widget _buildAddFavoritesButton(UserDetailViewModel vm) {
+  Widget _buildAddFavoritesButton(
+      UserDetailViewModel vm, MovieListModel? favoriteList) {
     return GestureDetector(
-      onTap: () async {
-        final created = await Navigator.push<bool>(
-          context,
-          MaterialPageRoute(builder: (_) => const CreateListScreen()),
-        );
-        if (created == true) {
-          await vm.load();
-        }
-      },
+      onTap: () => _openFavoriteMoviesPicker(vm, favoriteList),
       child: Container(
         width: double.infinity,
         padding: const EdgeInsets.symmetric(vertical: 28),
         decoration: BoxDecoration(
-          color: const Color(0xFF1E1E1E),
+          color: AppColors.surface,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.white10),
+          border: Border.all(color: AppColors.divider),
         ),
         child: const Column(
           children: [
             Icon(Icons.add_circle_outline_rounded,
-                color: Colors.white38, size: 40),
+                color: AppColors.textMedium, size: 40),
             SizedBox(height: 10),
             Text(
               'Favori Film Ekle',
               style: TextStyle(
-                color: Colors.white54,
+                color: AppColors.textMedium,
                 fontSize: 15,
                 fontWeight: FontWeight.w600,
               ),
@@ -700,6 +701,336 @@ class _UserDetailScreenState extends State<UserDetailScreen>
         ),
       ),
     );
+  }
+
+  Future<void> _openFavoriteMoviesPicker(
+    UserDetailViewModel vm,
+    MovieListModel? favoriteList,
+  ) async {
+    final existingIds =
+        favoriteList?.items.map((e) => e.tmdbId).toSet() ?? <int>{};
+
+    final selectedMovies =
+        await _showFavoriteMoviesModal(existingIds: existingIds);
+    if (!mounted || selectedMovies == null || selectedMovies.isEmpty) return;
+
+    MovieListModel? targetList = favoriteList;
+
+    if (targetList == null) {
+      final createdResult = await AppScope.instance.listsRepository.createList(
+        name: 'Favori Filmler',
+        description: 'Profilde öne çıkan favori filmler',
+        isPublic: true,
+      );
+
+      if (createdResult.isFailure || createdResult.data == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Favori listesi oluşturulamadı.')),
+        );
+        return;
+      }
+
+      targetList = createdResult.data!;
+    }
+
+    final toAdd = selectedMovies
+        .where((movie) => !existingIds.contains(movie.id))
+        .toList(growable: false);
+
+    if (toAdd.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Seçilen filmler zaten favori listende var.')),
+      );
+      return;
+    }
+
+    var addedCount = 0;
+    for (final movie in toAdd) {
+      final success = await AppScope.instance.listsRepository.addMovieToList(
+        listId: targetList.id,
+        movie: movie,
+      );
+      if (success) addedCount++;
+    }
+
+    await vm.load();
+    if (!mounted) return;
+
+    final failedCount = toAdd.length - addedCount;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          failedCount == 0
+              ? '$addedCount film favori listene eklendi.'
+              : '$addedCount film eklendi, $failedCount film eklenemedi.',
+        ),
+      ),
+    );
+  }
+
+  Future<List<Movie>?> _showFavoriteMoviesModal({
+    required Set<int> existingIds,
+  }) async {
+    final searchController = TextEditingController();
+    final searchResults = <Movie>[];
+    final selectedMovies = <int, Movie>{};
+    Timer? debounce;
+    bool isSearching = false;
+
+    final result = await showModalBottomSheet<List<Movie>>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.background,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            Future<void> onSearchChanged(String value) async {
+              debounce?.cancel();
+              final query = value.trim();
+
+              if (query.length < 2) {
+                setModalState(() {
+                  searchResults.clear();
+                  isSearching = false;
+                });
+                return;
+              }
+
+              debounce = Timer(const Duration(milliseconds: 350), () async {
+                if (!context.mounted) return;
+                setModalState(() => isSearching = true);
+
+                final results = await AppScope.instance.moviesRepository
+                    .searchMovies(query);
+
+                if (!context.mounted) return;
+                setModalState(() {
+                  searchResults
+                    ..clear()
+                    ..addAll(results);
+                  isSearching = false;
+                });
+              });
+            }
+
+            return Padding(
+              padding: EdgeInsets.only(
+                left: 16,
+                right: 16,
+                top: 16,
+                bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+              ),
+              child: SizedBox(
+                height: 560,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Center(
+                      child: Text(
+                        'Favori Filmlerine Ekle',
+                        style: TextStyle(
+                          color: AppColors.textHigh,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: searchController,
+                      onChanged: onSearchChanged,
+                      style: const TextStyle(color: AppColors.textHigh),
+                      decoration: InputDecoration(
+                        hintText: 'Film ara (en az 2 karakter)',
+                        hintStyle: const TextStyle(color: AppColors.textMedium),
+                        prefixIcon: const Icon(Icons.search,
+                            color: AppColors.textMedium),
+                        filled: true,
+                        fillColor: AppColors.surface,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: BorderSide.none,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      '${selectedMovies.length} film seçildi',
+                      style: const TextStyle(
+                        color: AppColors.textMedium,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Expanded(
+                      child: isSearching
+                          ? const Center(
+                              child: CircularProgressIndicator(
+                                color: AppColors.primary,
+                              ),
+                            )
+                          : searchResults.isEmpty
+                              ? const Center(
+                                  child: Text(
+                                    'Film arayarak seçim yapabilirsin.',
+                                    style:
+                                        TextStyle(color: AppColors.textMedium),
+                                  ),
+                                )
+                              : ListView.separated(
+                                  itemCount: searchResults.length,
+                                  separatorBuilder: (_, __) => Divider(
+                                    color: AppColors.textHigh
+                                        .withValues(alpha: 0.06),
+                                    height: 1,
+                                  ),
+                                  itemBuilder: (context, index) {
+                                    final movie = searchResults[index];
+                                    final isAlreadyAdded =
+                                        existingIds.contains(movie.id);
+                                    final isSelected =
+                                        selectedMovies.containsKey(movie.id);
+
+                                    return ListTile(
+                                      enabled: !isAlreadyAdded,
+                                      contentPadding:
+                                          const EdgeInsets.symmetric(
+                                              horizontal: 4, vertical: 4),
+                                      leading: SizedBox(
+                                        width: 42,
+                                        child: AspectRatio(
+                                          aspectRatio: 2 / 3,
+                                          child: ClipRRect(
+                                            borderRadius:
+                                                BorderRadius.circular(6),
+                                            child: movie.posterUrl.isEmpty
+                                                ? Container(
+                                                    color: AppColors.surface,
+                                                    child: const Icon(
+                                                      Icons.movie,
+                                                      color:
+                                                          AppColors.textMedium,
+                                                      size: 18,
+                                                    ),
+                                                  )
+                                                : CachedNetworkImage(
+                                                    imageUrl: movie.posterUrl,
+                                                    fit: BoxFit.cover,
+                                                  ),
+                                          ),
+                                        ),
+                                      ),
+                                      title: Text(
+                                        movie.title,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          color: isAlreadyAdded
+                                              ? AppColors.textMedium
+                                              : AppColors.textHigh,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                      subtitle: Text(
+                                        isAlreadyAdded
+                                            ? 'Bu film zaten favorilerde'
+                                            : movie.releaseYear,
+                                        style: TextStyle(
+                                          color: isAlreadyAdded
+                                              ? AppColors.warning
+                                              : AppColors.textMedium,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                      trailing: Checkbox(
+                                        value: isSelected,
+                                        onChanged: isAlreadyAdded
+                                            ? null
+                                            : (checked) {
+                                                setModalState(() {
+                                                  if (checked == true) {
+                                                    selectedMovies[movie.id] =
+                                                        movie;
+                                                  } else {
+                                                    selectedMovies
+                                                        .remove(movie.id);
+                                                  }
+                                                });
+                                              },
+                                      ),
+                                      onTap: isAlreadyAdded
+                                          ? null
+                                          : () {
+                                              setModalState(() {
+                                                if (isSelected) {
+                                                  selectedMovies
+                                                      .remove(movie.id);
+                                                } else {
+                                                  selectedMovies[movie.id] =
+                                                      movie;
+                                                }
+                                              });
+                                            },
+                                    );
+                                  },
+                                ),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () {
+                              debounce?.cancel();
+                              Navigator.of(context).pop();
+                            },
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: AppColors.textMedium,
+                              side: const BorderSide(color: AppColors.divider),
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                            ),
+                            child: const Text('Vazgeç'),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: selectedMovies.isEmpty
+                                ? null
+                                : () {
+                                    debounce?.cancel();
+                                    Navigator.of(context)
+                                        .pop(selectedMovies.values.toList());
+                                  },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.primary,
+                              foregroundColor: AppColors.textHigh,
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                            ),
+                            child: const Text('Kaydet'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+
+    debounce?.cancel();
+    searchController.dispose();
+    return result;
   }
 
   Widget _buildFavoritesGrid(List<dynamic> movies) {
@@ -720,9 +1051,9 @@ class _UserDetailScreenState extends State<UserDetailScreen>
                 aspectRatio: 2 / 3,
                 child: Container(
                   decoration: BoxDecoration(
-                    color: const Color(0xFF1B1B1B),
+                    color: AppColors.surface,
                     borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+                    border: Border.all(color: AppColors.divider),
                     image: posterUrl.isNotEmpty
                         ? DecorationImage(
                             image: CachedNetworkImageProvider(posterUrl),
@@ -771,7 +1102,7 @@ class _UserDetailScreenState extends State<UserDetailScreen>
                     child: Text(
                       listName.toUpperCase(),
                       style: const TextStyle(
-                        color: Colors.white54,
+                        color: AppColors.textMedium,
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
                         letterSpacing: 1.2,
@@ -798,7 +1129,7 @@ class _UserDetailScreenState extends State<UserDetailScreen>
                     child: Text(
                       widget.isMe ? 'Listeyi Düzenle' : 'Tümünü Gör',
                       style: const TextStyle(
-                        color: Colors.white70,
+                        color: AppColors.textMedium,
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
                       ),
@@ -814,22 +1145,22 @@ class _UserDetailScreenState extends State<UserDetailScreen>
                     width: double.infinity,
                     padding: const EdgeInsets.all(24),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF1E1E1E),
+                      color: AppColors.surface,
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.white10),
+                      border: Border.all(color: AppColors.divider),
                     ),
                     child: Center(
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           const Icon(Icons.movie_filter_outlined,
-                              color: Colors.white24, size: 48),
+                              color: AppColors.textMedium, size: 48),
                           const SizedBox(height: 12),
                           Text(
                             widget.isMe
                                 ? 'Bu listeye henüz film eklemedin'
                                 : 'Bu listede henüz film yok',
-                            style: const TextStyle(color: Colors.white54),
+                            style: const TextStyle(color: AppColors.textMedium),
                           ),
                         ],
                       ),
@@ -852,9 +1183,9 @@ class _UserDetailScreenState extends State<UserDetailScreen>
                           aspectRatio: 2 / 3,
                           child: Container(
                             decoration: BoxDecoration(
-                              color: const Color(0xFF1E1E1E),
+                              color: AppColors.surface,
                               borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: Colors.white10),
+                              border: Border.all(color: AppColors.divider),
                               image: posterUrl.isNotEmpty
                                   ? DecorationImage(
                                       image:
@@ -866,7 +1197,7 @@ class _UserDetailScreenState extends State<UserDetailScreen>
                             child: posterUrl.isEmpty
                                 ? const Center(
                                     child: Icon(Icons.movie,
-                                        color: Colors.white24))
+                                        color: AppColors.textMedium))
                                 : null,
                           ),
                         ),
@@ -881,34 +1212,49 @@ class _UserDetailScreenState extends State<UserDetailScreen>
     );
   }
 
-  Widget _buildMatchHistory() {
-    final matches = [
-      {
-        'name': 'Ali',
-        'movie': 'Interstellar',
-        'imageUrl': 'https://i.pravatar.cc/150?u=a042581f4e29026704d'
-      },
-      {
-        'name': 'Ayşe',
-        'movie': 'Oppenheimer',
-        'imageUrl': 'https://i.pravatar.cc/150?u=a042581f4e29026704e'
-      },
-      {
-        'name': 'Fatma',
-        'movie': 'Barbie',
-        'imageUrl': 'https://i.pravatar.cc/150?u=a042581f4e29026704f'
-      },
-      {
-        'name': 'Mehmet',
-        'movie': 'Inception',
-        'imageUrl': 'https://i.pravatar.cc/150?u=a042581f4e29026704g'
-      },
-      {
-        'name': 'Kemal',
-        'movie': 'Dune',
-        'imageUrl': 'https://i.pravatar.cc/150?u=a042581f4e29026704h'
-      },
-    ];
+  Widget _buildMatchHistory(UserDetailViewModel vm) {
+    if (vm.matchHistoryItems.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'EŞLEŞME GEÇMİŞİ',
+              style: TextStyle(
+                color: AppColors.textMedium,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 1.2,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppColors.divider),
+              ),
+              child: const Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.people_alt_outlined, color: AppColors.textMedium, size: 48),
+                    SizedBox(height: 12),
+                    Text(
+                      'Henüz eşleşme geçmişin yok',
+                      style: TextStyle(color: AppColors.textMedium),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
@@ -921,19 +1267,28 @@ class _UserDetailScreenState extends State<UserDetailScreen>
               const Text(
                 'EŞLEŞME GEÇMİŞİ',
                 style: TextStyle(
-                  color: Colors.white54,
+                  color: AppColors.textMedium,
                   fontSize: 13,
                   fontWeight: FontWeight.w600,
                   letterSpacing: 1.2,
                 ),
               ),
-              if (matches.length > 4)
-                const Text(
-                  'Tümünü Gör',
-                  style: TextStyle(
-                    color: Colors.white70,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
+              if (vm.matchHistoryItems.length > 4)
+                GestureDetector(
+                  onTap: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const MatchHistoryFullListScreen(),
+                      ),
+                    );
+                  },
+                  child: const Text(
+                    'Tümünü Gör',
+                    style: TextStyle(
+                      color: AppColors.textMedium,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
             ],
@@ -942,40 +1297,65 @@ class _UserDetailScreenState extends State<UserDetailScreen>
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(
-              children: matches.take(5).map((match) {
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: vm.matchHistoryItems.map((match) {
                 return Padding(
                   padding: const EdgeInsets.only(right: 16.0),
-                  child: Column(
-                    children: [
-                      CircleAvatar(
-                        radius: 35,
-                        backgroundColor: const Color(0xFF1E1E1E),
-                        backgroundImage: NetworkImage(match['imageUrl']!),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        match['name']!,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 13,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      SizedBox(
-                        width: 70,
-                        child: Text(
-                          match['movie']!,
-                          textAlign: TextAlign.center,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Colors.white54,
-                            fontSize: 11,
+                  child: GestureDetector(
+                    onTap: () {
+                      // Push to the matched user's profile
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => UserDetailScreen(
+                            userId: match.matchedUserId,
+                            isMe: false,
                           ),
                         ),
-                      ),
-                    ],
+                      );
+                    },
+                    child: Column(
+                      children: [
+                        CircleAvatar(
+                          radius: 35,
+                          backgroundColor: AppColors.surface,
+                          backgroundImage: (match.avatarUrl != null && match.avatarUrl!.isNotEmpty)
+                              ? NetworkImage(
+                                  match.avatarUrl!.startsWith('http')
+                                      ? match.avatarUrl!
+                                      : 'http://10.0.2.2:8080${match.avatarUrl}',
+                                )
+                              : null,
+                          child: (match.avatarUrl == null || match.avatarUrl!.isEmpty)
+                              ? const Icon(Icons.person, color: AppColors.textMedium)
+                              : null,
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          match.username ?? 'Kullanıcı',
+                          style: const TextStyle(
+                            color: AppColors.textHigh,
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 4),
+                        SizedBox(
+                          width: 70,
+                          child: Text(
+                            match.movieName,
+                            textAlign: TextAlign.center,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: AppColors.textMedium,
+                              fontSize: 11,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 );
               }).toList(),
@@ -993,7 +1373,7 @@ class _UserDetailScreenState extends State<UserDetailScreen>
         Text(
           count,
           style: const TextStyle(
-            color: Colors.white,
+            color: AppColors.textHigh,
             fontSize: 22,
             fontWeight: FontWeight.bold,
           ),
@@ -1002,7 +1382,7 @@ class _UserDetailScreenState extends State<UserDetailScreen>
         Text(
           label,
           style: const TextStyle(
-            color: Colors.white70,
+            color: AppColors.textMedium,
             fontSize: 10,
             fontWeight: FontWeight.w600,
           ),
@@ -1015,7 +1395,7 @@ class _UserDetailScreenState extends State<UserDetailScreen>
     return Container(
       height: 24,
       width: 1,
-      color: Colors.white12,
+      color: AppColors.divider,
     );
   }
 
@@ -1024,17 +1404,17 @@ class _UserDetailScreenState extends State<UserDetailScreen>
       width: double.infinity,
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
-        color: const Color(0xFF1E1E1E),
+        color: AppColors.surface,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white10),
+        border: Border.all(color: AppColors.divider),
       ),
       child: Column(
         children: [
-          Icon(icon, color: Colors.white24, size: 48),
+          Icon(icon, color: AppColors.textMedium, size: 48),
           const SizedBox(height: 12),
           Text(text,
               textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.white54)),
+              style: const TextStyle(color: AppColors.textMedium)),
         ],
       ),
     );
@@ -1044,7 +1424,7 @@ class _UserDetailScreenState extends State<UserDetailScreen>
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => Scaffold(
-          backgroundColor: Colors.black,
+          backgroundColor: AppColors.background,
           body: Stack(
             fit: StackFit.expand,
             children: [
@@ -1053,11 +1433,11 @@ class _UserDetailScreenState extends State<UserDetailScreen>
                   imageUrl: imageUrl,
                   fit: BoxFit.contain,
                   placeholder: (_, __) => const Center(
-                    child: CircularProgressIndicator(color: Colors.redAccent),
+                    child: CircularProgressIndicator(color: AppColors.primary),
                   ),
                   errorWidget: (_, __, ___) => const Center(
                     child: Icon(Icons.broken_image,
-                        color: Colors.white38, size: 64),
+                        color: AppColors.textMedium, size: 64),
                   ),
                 ),
               ),
@@ -1069,11 +1449,11 @@ class _UserDetailScreenState extends State<UserDetailScreen>
                   child: Container(
                     padding: const EdgeInsets.all(8),
                     decoration: const BoxDecoration(
-                      color: Colors.black54,
+                      color: AppColors.overlay,
                       shape: BoxShape.circle,
                     ),
-                    child:
-                        const Icon(Icons.close, color: Colors.white, size: 22),
+                    child: const Icon(Icons.close,
+                        color: AppColors.textHigh, size: 22),
                   ),
                 ),
               ),
